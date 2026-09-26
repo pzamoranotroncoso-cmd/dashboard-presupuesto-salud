@@ -1,0 +1,8 @@
+{
+  "name": "Remix Aplicación de Ejecución Presupuestaria FACSyO",
+  "description": "Dashboard interactivo de ejecución presupuestaria para la Facultad de Salud y Odontología de la UDP conectado en tiempo real con Google Sheets y Google Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
