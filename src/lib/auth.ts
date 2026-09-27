@@ -7,7 +7,17 @@ import {
   User,
   signOut
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+
+// Configuración oficial Firebase de presupuesto-udp (Patricio Zamorano)
+const firebaseConfig = {
+  apiKey: "AIzaSyD-zdhF2ofBBcSPVfQ-O6L5OrdhXAgT9a8",
+  authDomain: "presupuesto-udp.firebaseapp.com",
+  projectId: "presupuesto-udp",
+  storageBucket: "presupuesto-udp.firebasestorage.app",
+  messagingSenderId: "106538505691",
+  appId: "1:106538505691:web:2a171a90c2f6e1a73903fe",
+  measurementId: "G-ZZNVMZJ861"
+};
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
