@@ -8,7 +8,6 @@ import {
   signOut
 } from 'firebase/auth';
 
-// Configuración oficial Firebase de presupuesto-udp (Patricio Zamorano)
 const firebaseConfig = {
   apiKey: "AIzaSyD-zdhF2ofBBcSPVfQ-O6L5OrdhXAgT9a8",
   authDomain: "presupuesto-udp.firebaseapp.com",
