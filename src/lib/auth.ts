@@ -8,6 +8,7 @@ import {
   signOut
 } from 'firebase/auth';
 
+// Configuración oficial Firebase de presupuesto-udp (Patricio Zamorano)
 const firebaseConfig = {
   apiKey: "AIzaSyD-zdhF2ofBBcSPVfQ-O6L5OrdhXAgT9a8",
   authDomain: "presupuesto-udp.firebaseapp.com",
@@ -21,6 +22,7 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
+// Proveedor estándar de Google (sin permisos sensibles que bloqueen la ventana)
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({
   prompt: 'select_account'
