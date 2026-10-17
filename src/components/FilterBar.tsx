@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, RotateCw, Filter, Calendar, Percent, Layers, Printer, ChevronDown, Check, X } from 'lucide-react';
+import { Search, RotateCw, Filter, Calendar, Layers, Printer, ChevronDown, Check, X, Tag } from 'lucide-react';
 import { StatusFilterType } from '../types';
 
 interface FilterBarProps {
@@ -7,6 +7,9 @@ interface FilterBarProps {
   onSearchChange: (val: string) => void;
   statusFilter: StatusFilterType;
   onStatusFilterChange: (val: StatusFilterType) => void;
+  selectedTipoPresupuesto: string;
+  onSelectedTipoPresupuestoChange: (val: string) => void;
+  availableTiposPresupuesto: string[];
   selectedAccounts: string[];
   onSelectedAccountsChange: (val: string[]) => void;
   accountOptions: { id: string; name: string }[];
@@ -15,8 +18,6 @@ interface FilterBarProps {
   availableMonths: string[];
   useShortFormat: boolean;
   onToggleFormat: () => void;
-  usePercentOnlyMode: boolean;
-  onTogglePercentMode: () => void;
 }
 
 export const FilterBar: React.FC<FilterBarProps> = ({
@@ -24,6 +25,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
+  selectedTipoPresupuesto,
+  onSelectedTipoPresupuestoChange,
+  availableTiposPresupuesto,
   selectedAccounts,
   onSelectedAccountsChange,
   accountOptions,
@@ -31,9 +35,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onSelectedMonthChange,
   availableMonths,
   useShortFormat,
-  onToggleFormat,
-  usePercentOnlyMode,
-  onTogglePercentMode
+  onToggleFormat
 }) => {
   const [isAccountDropdownOpen, setIsAccountDropdownOpen] = useState(false);
   const [accountSearchQuery, setAccountSearchQuery] = useState('');
@@ -61,11 +63,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
 
   const handleToggleAccount = (id: string) => {
     if (isAllSelected) {
-      // Transition from all selected to all EXCEPT this one
       const remaining = accountOptions.map(a => a.id).filter(accId => accId !== id);
       onSelectedAccountsChange(remaining.length > 0 ? remaining : ['__NONE__']);
     } else if (isNoneSelected) {
-      // Start selection with only this one
       onSelectedAccountsChange([id]);
     } else {
       if (selectedAccounts.includes(id)) {
@@ -74,7 +74,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       } else {
         const next = [...selectedAccounts, id];
         if (next.length === accountOptions.length) {
-          onSelectedAccountsChange([]); // Back to all
+          onSelectedAccountsChange([]);
         } else {
           onSelectedAccountsChange(next);
         }
@@ -126,7 +126,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       {/* Search & Filters */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Search account */}
-        <div className="relative min-w-[220px] flex-1 sm:flex-initial">
+        <div className="relative min-w-[200px] flex-1 sm:flex-initial">
           <label htmlFor="searchInput" className="sr-only">Buscar cuenta</label>
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
@@ -137,6 +137,29 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             onChange={e => onSearchChange(e.target.value)}
             className="w-full pl-9 pr-3.5 py-2 rounded-lg border border-slate-300 bg-slate-50 text-xs sm:text-sm font-medium text-slate-800 focus:bg-white focus:border-sky-500 focus:ring-2 focus:ring-sky-200 outline-none transition-all"
           />
+        </div>
+
+        {/* Tipo de Presupuesto Filter (Nuevo: antes de elegir la cuenta) */}
+        <div className="flex items-center gap-1.5 flex-1 sm:flex-initial">
+          <Tag className="w-3.5 h-3.5 text-sky-600 shrink-0 hidden sm:block" />
+          <select
+            id="tipoPresupuestoFilter"
+            aria-label="Tipo de Presupuesto"
+            value={selectedTipoPresupuesto}
+            onChange={e => onSelectedTipoPresupuestoChange(e.target.value)}
+            className="w-full sm:w-auto px-3 py-2 rounded-lg border border-sky-300 bg-sky-50 text-sky-950 font-bold text-xs sm:text-sm focus:bg-white focus:border-sky-600 focus:ring-2 focus:ring-sky-200 outline-none transition-all cursor-pointer shadow-2xs"
+          >
+            <option value="TODOS">📁 Todos los Presupuestos</option>
+            {availableTiposPresupuesto.map(tipo => {
+              const isOperacional = tipo.toLowerCase().includes('operac');
+              const label = isOperacional ? '💼 Presupuesto Operacional' : '🎓 Presupuesto de Malla';
+              return (
+                <option key={tipo} value={tipo}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
         </div>
 
         {/* Status filter */}
@@ -315,7 +338,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             onChange={e => onSelectedMonthChange(e.target.value)}
             className="w-full sm:w-auto px-3 py-2 rounded-lg border border-slate-300 bg-slate-50 text-xs sm:text-sm font-semibold text-slate-700 focus:bg-white focus:border-sky-500 focus:ring-2 focus:ring-sky-200 outline-none transition-all cursor-pointer"
           >
-            <option value="ALL">Acumulado Total (A Agosto)</option>
+            <option value="ALL">Acumulado Total</option>
             {availableMonths.map(m => (
               <option key={m} value={m}>
                 Solo Mes: {m}
@@ -325,34 +348,16 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
       </div>
 
-      {/* Actions: Toggle format, Toggle % mode, and Print */}
+      {/* Actions: Toggle format and Print */}
       <div className="flex items-center gap-2.5 self-end md:self-auto flex-wrap">
-        {/* Toggle currency format: only visible when NOT in % mode */}
-        {!usePercentOnlyMode && (
-          <button
-            id="btn-toggle-format"
-            onClick={onToggleFormat}
-            className="inline-flex items-center gap-1.5 border px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
-            title="Alternar entre notación resumida en millones y montos completos en CLP"
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-            <span>{useShortFormat ? 'Notación: $M / $MM' : 'Notación: $ CLP Completo'}</span>
-          </button>
-        )}
-
-        {/* Botón Solicitado: Cambiar todos los valores a ejecución de % */}
         <button
-          id="btn-toggle-percent-mode"
-          onClick={onTogglePercentMode}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border shadow-2xs ${
-            usePercentOnlyMode
-              ? 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700 ring-2 ring-indigo-200'
-              : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
-          }`}
-          title="Cambiar todos los valores y tarjetas a % (Modo Presentación: oculta cifras en pesos para audiencias)"
+          id="btn-toggle-format"
+          onClick={onToggleFormat}
+          className="inline-flex items-center gap-1.5 border px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+          title="Alternar entre notación resumida en millones y montos completos en CLP"
         >
-          <Percent className="w-3.5 h-3.5" />
-          <span>{usePercentOnlyMode ? '🔒 Modo % Activo (Cifras Ocultas)' : '📊 Ver en % (Modo Presentación)'}</span>
+          <RotateCw className="w-3.5 h-3.5" />
+          <span>{useShortFormat ? 'Notación: $M / $MM' : 'Notación: $ CLP Completo'}</span>
         </button>
 
         <button

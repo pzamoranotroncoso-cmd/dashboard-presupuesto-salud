@@ -39,14 +39,12 @@ interface ChartsSectionProps {
   accounts: BudgetAccount[];
   monthlyEvolution: MonthlyEvolutionItem[];
   useShortFormat: boolean;
-  usePercentOnlyMode?: boolean;
 }
 
 export const ChartsSection: React.FC<ChartsSectionProps> = ({
   accounts,
   monthlyEvolution,
-  useShortFormat,
-  usePercentOnlyMode = false
+  useShortFormat
 }) => {
   const chartComparativoRef = useRef<HTMLCanvasElement | null>(null);
   const chartEvolucionRef = useRef<HTMLCanvasElement | null>(null);
@@ -99,10 +97,6 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
             tooltip: {
               callbacks: {
                 label: context => {
-                  if (usePercentOnlyMode && totalPresupuesto > 0) {
-                    const pct = ((Number(context.raw) / totalPresupuesto) * 100).toFixed(1);
-                    return `${context.dataset.label}: ${pct.replace('.', ',')}% del PPTO Total`;
-                  }
                   return `${context.dataset.label}: ${formatCLP(context.raw as number, useShortFormat)}`;
                 }
               }
@@ -113,9 +107,6 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
               beginAtZero: true,
               ticks: {
                 callback: val => {
-                  if (usePercentOnlyMode && totalPresupuesto > 0) {
-                    return `${((Number(val) / totalPresupuesto) * 100).toFixed(0)}%`;
-                  }
                   return formatCLP(Number(val), true);
                 }
               }
@@ -131,8 +122,8 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
         chartEvolucionInst.current.destroy();
       }
 
-      // Filter months that have plan or execution up to August
-      const activeMonths = monthlyEvolution.filter((_, idx) => idx <= 7);
+      // Filter months to display only up to October (idx <= 9) as November and December are not yet executed
+      const activeMonths = monthlyEvolution.filter((_, idx) => idx <= 9);
 
       chartEvolucionInst.current = new Chart(chartEvolucionRef.current, {
         type: 'line',
@@ -148,7 +139,8 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
               tension: 0.35,
               borderWidth: 3,
               pointRadius: 5,
-              pointBackgroundColor: '#0369a1'
+              pointBackgroundColor: '#0369a1',
+              spanGaps: false
             },
             {
               label: 'Plan Presupuestario Acumulado',
@@ -172,9 +164,8 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
             tooltip: {
               callbacks: {
                 label: context => {
-                  if (usePercentOnlyMode && totalPresupuesto > 0) {
-                    const pct = ((Number(context.raw) / totalPresupuesto) * 100).toFixed(1);
-                    return `${context.dataset.label} (${context.label}): ${pct.replace('.', ',')}% del PPTO Total`;
+                  if (context.raw === null || context.raw === undefined) {
+                    return `${context.dataset.label} (${context.label}): Sin datos registrados`;
                   }
                   return `${context.dataset.label} (${context.label}): ${formatCLP(context.raw as number, useShortFormat)}`;
                 }
@@ -186,9 +177,6 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
               beginAtZero: true,
               ticks: {
                 callback: val => {
-                  if (usePercentOnlyMode && totalPresupuesto > 0) {
-                    return `${((Number(val) / totalPresupuesto) * 100).toFixed(0)}%`;
-                  }
                   return formatCLP(Number(val), true);
                 }
               }
@@ -204,21 +192,39 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
         chartParticipacionInst.current.destroy();
       }
 
-      const executedOnly = accounts.filter(c => c.ejecutado > 0);
+      // Group executed expenses by account name so categories are unified and clean
+      const nameMap = new Map<string, number>();
+      accounts.forEach(c => {
+        if (c.ejecutado > 0 && c.name && !c.name.toLowerCase().startsWith('total')) {
+          const cleanName = c.name.trim();
+          nameMap.set(cleanName, (nameMap.get(cleanName) || 0) + c.ejecutado);
+        }
+      });
+
+      // Sort by executed amount descending so largest expenses are rendered first
+      const sortedEntries = Array.from(nameMap.entries())
+        .sort((a, b) => b[1] - a[1]);
+
       const palette = [
         '#0284c7', '#059669', '#d97706', '#dc2626', '#8b5cf6',
-        '#0d9488', '#e11d48', '#4f46e5', '#ca8a04', '#0891b2'
+        '#0d9488', '#e11d48', '#4f46e5', '#ca8a04', '#0891b2',
+        '#9333ea', '#16a34a', '#ea580c', '#2563eb', '#db2777',
+        '#047857', '#7c3aed', '#b45309', '#3b82f6', '#65a30d',
+        '#be185d', '#0f766e', '#1d4ed8', '#c2410c', '#6366f1',
+        '#10b981', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6'
       ];
-      const totalEjec = executedOnly.reduce((a, b) => a + b.ejecutado, 0);
+      const totalEjec = sortedEntries.reduce((sum, [, val]) => sum + val, 0);
 
       chartParticipacionInst.current = new Chart(chartParticipacionRef.current, {
         type: 'doughnut',
         data: {
-          labels: executedOnly.map(c => c.name),
+          labels: sortedEntries.map(([name]) => name),
           datasets: [
             {
-              data: executedOnly.map(c => c.ejecutado),
-              backgroundColor: palette.slice(0, executedOnly.length)
+              data: sortedEntries.map(([, val]) => val),
+              backgroundColor: sortedEntries.map((_, idx) => palette[idx % palette.length]),
+              borderColor: '#ffffff',
+              borderWidth: 1.5
             }
           ]
         },
@@ -230,7 +236,8 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
               position: 'right',
               labels: {
                 boxWidth: 12,
-                font: { size: 11 }
+                font: { size: 11 },
+                padding: 8
               }
             },
             tooltip: {
@@ -238,9 +245,6 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
                 label: context => {
                   const val = (context.raw as number) || 0;
                   const pct = totalEjec > 0 ? ((val / totalEjec) * 100).toFixed(1) : '0';
-                  if (usePercentOnlyMode) {
-                    return `${context.label}: ${pct.replace('.', ',')}% de participación`;
-                  }
                   return `${context.label}: ${formatCLP(val, useShortFormat)} (${pct}%)`;
                 }
               }
@@ -302,7 +306,7 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
       chartParticipacionInst.current?.destroy();
       chartPorcentajeInst.current?.destroy();
     };
-  }, [accounts, monthlyEvolution, useShortFormat, usePercentOnlyMode]);
+  }, [accounts, monthlyEvolution, useShortFormat]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -313,7 +317,7 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
             Presupuesto vs. Ejecutado por Clase de Coste
           </h2>
           <span className="text-xs text-slate-400 font-medium">
-            {usePercentOnlyMode ? '(Expresado en % del Presupuesto)' : `(Expresado en ${useShortFormat ? '$M y $MM' : '$ CLP'})`}
+            (Expresado en {useShortFormat ? '$M y $MM' : '$ CLP'})
           </span>
         </div>
         <div className="relative flex-grow min-h-[300px]">
@@ -328,7 +332,7 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({
             Evolución Mensual del Consumo Real vs Plan
           </h2>
           <span className="text-xs text-slate-400 font-medium">
-            (Ene - Ago 2026)
+            (Ene - Oct 2026)
           </span>
         </div>
         <div className="relative flex-grow min-h-[300px]">

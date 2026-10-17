@@ -134,7 +134,11 @@ export const FileSelectorModal: React.FC<FileSelectorModalProps> = ({
           ) : (
             filteredFiles.map(file => {
               const isSelected = file.id === selectedFileId;
-              const isTarget = file.name.toLowerCase().includes('obstetricia');
+              const isTarget =
+                file.name.toLowerCase().includes('ejecucion') ||
+                file.name.toLowerCase().includes('presupuestaria') ||
+                file.name.toLowerCase().includes('2026') ||
+                file.name.toLowerCase().includes('obstetricia');
 
               return (
                 <div

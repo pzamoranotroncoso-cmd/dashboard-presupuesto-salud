@@ -8,7 +8,7 @@ import {
 } from '../types';
 import { DEFAULT_USERS, DEMO_CECO, DEMO_CECO_NAME } from './demoData';
 
-export const TARGET_SHEET_DEFAULT_NAME = "Ejecución Presupuestaria Obstetricia Agosto 2026";
+export const TARGET_SHEET_DEFAULT_NAME = "Ejecución Presupuestaria 2026";
 
 export const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 export const MONTH_NAMES_FULL = [
@@ -26,7 +26,7 @@ export async function searchSpreadsheets(
   const query = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
     query
-  )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc&pageSize=30`;
+  )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc`;
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -84,11 +84,12 @@ export function parseFinancialNumber(val: any): number {
   let str = String(val).trim();
   if (!str) return 0;
 
-  // Remove currency symbol, spaces
-  str = str.replace(/[$CLP\s]/gi, '');
+  // Remove currency symbol, spaces, non-breaking spaces
+  str = str.replace(/[$CLP\s\u00A0]/gi, '');
   if (!str) return 0;
 
-  const isNegative = str.startsWith('-') || (str.startsWith('(') && str.endsWith(')'));
+  // Detect negative format including SAP trailing minus (e.g. 1.250.000- or -1.250.000 or (1.250.000))
+  const isNegative = str.startsWith('-') || str.endsWith('-') || (str.startsWith('(') && str.endsWith(')'));
   str = str.replace(/[()\-]/g, '');
 
   // If contains both '.' and ',', check position
@@ -126,7 +127,7 @@ export function parseFinancialNumber(val: any): number {
  */
 export function parseDateAndMonth(rawDate: any): { dateStr: string; mes: string; monthIndex: number } {
   if (!rawDate) {
-    return { dateStr: '', mes: 'Desconocido', monthIndex: -1 };
+    return { dateStr: '', mes: '', monthIndex: -1 };
   }
 
   // Handle Excel serial date number
@@ -139,28 +140,66 @@ export function parseDateAndMonth(rawDate: any): { dateStr: string; mes: string;
     const year = dateObj.getUTCFullYear();
     return {
       dateStr: `${day}/${month}/${year}`,
-      mes: MONTH_NAMES_SHORT[mIdx] || 'Ene',
+      mes: MONTH_NAMES_SHORT[mIdx] || '',
       monthIndex: mIdx
     };
   }
 
   const str = String(rawDate).trim();
+  if (!str) {
+    return { dateStr: '', mes: '', monthIndex: -1 };
+  }
 
-  // Try parsing dd/mm/yyyy or dd-mm-yyyy
-  const dmyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-  if (dmyMatch) {
-    const day = dmyMatch[1].padStart(2, '0');
-    const monthNum = parseInt(dmyMatch[2], 10);
-    const year = dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3];
-    const mIdx = Math.max(0, Math.min(11, monthNum - 1));
+  // If numeric string representing Excel serial date
+  const numVal = Number(str);
+  if (!isNaN(numVal) && numVal > 30000 && numVal < 70000) {
+    const utcDays = Math.floor(numVal - 25569);
+    const dateObj = new Date(utcDays * 86400 * 1000);
+    const mIdx = dateObj.getUTCMonth();
+    const day = String(dateObj.getUTCDate()).padStart(2, '0');
+    const month = String(mIdx + 1).padStart(2, '0');
+    const year = dateObj.getUTCFullYear();
     return {
-      dateStr: `${day}/${String(monthNum).padStart(2, '0')}/${year}`,
-      mes: MONTH_NAMES_SHORT[mIdx],
+      dateStr: `${day}/${month}/${year}`,
+      mes: MONTH_NAMES_SHORT[mIdx] || '',
       monthIndex: mIdx
     };
   }
 
-  // Try parsing yyyy-mm-dd
+  // Try parsing dd/mm/yyyy or mm/dd/yyyy with separator (/ or - or .)
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if (dmyMatch) {
+    const p1 = parseInt(dmyMatch[1], 10);
+    const p2 = parseInt(dmyMatch[2], 10);
+    const year = dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3];
+
+    let day = p1;
+    let monthNum = p2;
+
+    // Disambiguate DD/MM vs MM/DD:
+    if (p1 > 12 && p2 <= 12) {
+      day = p1;
+      monthNum = p2;
+    } else if (p1 <= 12 && p2 > 12) {
+      monthNum = p1;
+      day = p2;
+    } else {
+      // Both <= 12: Default Latin American / Chilean standard DD/MM/YYYY
+      day = p1;
+      monthNum = p2;
+    }
+
+    if (monthNum >= 1 && monthNum <= 12) {
+      const mIdx = monthNum - 1;
+      return {
+        dateStr: `${String(day).padStart(2, '0')}/${String(monthNum).padStart(2, '0')}/${year}`,
+        mes: MONTH_NAMES_SHORT[mIdx] || '',
+        monthIndex: mIdx
+      };
+    }
+  }
+
+  // Try parsing yyyy-mm-dd or yyyy/mm/dd
   const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
   if (ymdMatch) {
     const year = ymdMatch[1];
@@ -169,15 +208,18 @@ export function parseDateAndMonth(rawDate: any): { dateStr: string; mes: string;
     const mIdx = Math.max(0, Math.min(11, monthNum - 1));
     return {
       dateStr: `${day}/${String(monthNum).padStart(2, '0')}/${year}`,
-      mes: MONTH_NAMES_SHORT[mIdx],
+      mes: MONTH_NAMES_SHORT[mIdx] || '',
       monthIndex: mIdx
     };
   }
 
-  // Check month words in text: "enero", "marzo", "agosto", etc.
+  // Check month words in text: strict regex word boundaries so words containing "dic" or "nov" don't trigger
   const lower = str.toLowerCase();
   for (let i = 0; i < MONTH_NAMES_FULL.length; i++) {
-    if (lower.includes(MONTH_NAMES_FULL[i].toLowerCase()) || lower.includes(MONTH_NAMES_SHORT[i].toLowerCase())) {
+    const full = MONTH_NAMES_FULL[i].toLowerCase();
+    const short = MONTH_NAMES_SHORT[i].toLowerCase();
+    const regex = new RegExp(`\\b(${full}|${short})\\b`, 'i');
+    if (regex.test(lower)) {
       return {
         dateStr: str,
         mes: MONTH_NAMES_SHORT[i],
@@ -186,7 +228,7 @@ export function parseDateAndMonth(rawDate: any): { dateStr: string; mes: string;
     }
   }
 
-  return { dateStr: str, mes: 'Ene', monthIndex: 0 };
+  return { dateStr: str, mes: '', monthIndex: -1 };
 }
 
 /**
@@ -219,9 +261,22 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
   const metaData = await metaRes.json();
   const sheets: Array<{ properties: { sheetId: number; title: string } }> = metaData.sheets || [];
 
-  let ejecucionSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('ejecucion'))?.properties.title;
-  let planSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('plan'))?.properties.title;
+  let ejecucionSheetTitle = sheets.find(s => {
+    const ch = cleanHeader(s.properties.title);
+    return ch.includes('ejecut') || ch.includes('ejecuc') || ch.includes('ejec') || ch.includes('gasto') || ch.includes('transac');
+  })?.properties.title;
+  let planSheetTitle = sheets.find(s => cleanHeader(s.properties.title) === 'plan')?.properties.title;
+  if (!planSheetTitle) {
+    planSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('plan'))?.properties.title;
+  }
+  console.log('Sheet titles found:', sheets.map(s => s.properties.title));
+  console.log('Identified Plan sheet title:', planSheetTitle);
+  console.log('Identified Ejecucion/Ejecutado sheet title:', ejecucionSheetTitle);
   let usuariosSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('usuario') || cleanHeader(s.properties.title).includes('permiso') || cleanHeader(s.properties.title).includes('user'))?.properties.title;
+  let tipoPresupuestoSheetTitle = sheets.find(s => {
+    const ch = cleanHeader(s.properties.title);
+    return ch.includes('tipopresupuesto') || ch.includes('tipodepresupuesto') || ch.includes('tiposdepresupuesto') || (ch.includes('tipo') && ch.includes('presupuesto'));
+  })?.properties.title;
 
   // Fallbacks if not named identically
   if (!ejecucionSheetTitle && sheets.length > 0) {
@@ -233,9 +288,24 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   // 2. Fetch data from sheets
   const rangesToFetch: string[] = [];
-  if (ejecucionSheetTitle) rangesToFetch.push(`'${ejecucionSheetTitle}'!A1:Z5000`);
-  if (planSheetTitle) rangesToFetch.push(`'${planSheetTitle}'!A1:Z5000`);
-  if (usuariosSheetTitle) rangesToFetch.push(`'${usuariosSheetTitle}'!A1:Z500`);
+  const rangeKeys: string[] = [];
+
+  if (ejecucionSheetTitle) {
+    rangesToFetch.push(`'${ejecucionSheetTitle}'!A1:AZ50000`);
+    rangeKeys.push('ejecucion');
+  }
+  if (planSheetTitle) {
+    rangesToFetch.push(`'${planSheetTitle}'!A1:AZ50000`);
+    rangeKeys.push('plan');
+  }
+  if (usuariosSheetTitle) {
+    rangesToFetch.push(`'${usuariosSheetTitle}'!A1:Z500`);
+    rangeKeys.push('usuarios');
+  }
+  if (tipoPresupuestoSheetTitle) {
+    rangesToFetch.push(`'${tipoPresupuestoSheetTitle}'!A1:Z1000`);
+    rangeKeys.push('tipoPresupuesto');
+  }
 
   const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${rangesToFetch
     .map(r => `ranges=${encodeURIComponent(r)}`)
@@ -253,17 +323,26 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
   const valuesData = await valuesRes.json();
   const valueRanges = valuesData.valueRanges || [];
 
-  const ejecucionRows = valueRanges[0]?.values || [];
-  const planRows = valueRanges[1]?.values || [];
-  const usuariosRows = usuariosSheetTitle ? (valueRanges[2]?.values || []) : [];
+  const getRowsForKey = (key: string) => {
+    const idx = rangeKeys.indexOf(key);
+    if (idx === -1) return [];
+    return valueRanges[idx]?.values || [];
+  };
+
+  const ejecucionRows = getRowsForKey('ejecucion');
+  const planRows = getRowsForKey('plan');
+  const usuariosRows = getRowsForKey('usuarios');
+  const tipoPresupuestoRows = getRowsForKey('tipoPresupuesto');
 
   return {
     ejecucionSheetTitle: ejecucionSheetTitle || 'Ejecución',
     planSheetTitle: planSheetTitle || 'Plan',
     usuariosSheetTitle,
+    tipoPresupuestoSheetTitle,
     ejecucionRows,
     planRows,
-    usuariosRows
+    usuariosRows,
+    tipoPresupuestoRows
   };
 }
 
@@ -336,11 +415,148 @@ export function parseUsersSheet(usuariosRows?: any[][]): AppUser[] {
 
 /**
  * Normalizes account ID / code key so that Plan and Ejecución match seamlessly
- * e.g. "51010101", 51010101, "51.01.01.01" all become "51010101"
+ * e.g. "51010101", 51010101, "51.01.01.01", "4202010106-odo" all become "4202010106"
  */
 export function normalizeAccountKey(val: any): string {
   if (val === null || val === undefined) return '';
-  return String(val).trim().replace(/[^0-9A-Za-z]/g, '');
+  let str = String(val).trim();
+  // Strip school suffixes like -odo, -obs, -enf, -kin, -tec, -doc, etc.
+  str = str.replace(/[-_](odo|obs|enf|kin|tec|med|salud|fac|doc|adm).*$/i, '').trim();
+  return str.replace(/[^0-9A-Za-z]/g, '');
+}
+
+/**
+ * Strictly standardizes budget types to the 2 official categories:
+ * "Presupuesto Operacional" | "Presupuesto de Malla"
+ */
+export function normalizeTipoPresupuesto(rawTipo: any, cuenta: string = '', nombre: string = ''): string {
+  const str = String(rawTipo || '').trim();
+  const lower = str.toLowerCase();
+
+  if (
+    lower.includes('malla') ||
+    lower.includes('docen') ||
+    lower.includes('curricul') ||
+    lower.includes('internado') ||
+    lower.includes('clinico') ||
+    lower.includes('remunera') ||
+    lower.includes('honorario') ||
+    lower.includes('sueldo') ||
+    lower.includes('planta')
+  ) {
+    return 'Presupuesto de Malla';
+  }
+
+  if (lower.includes('operacion') || lower.includes('operativ') || lower.includes('gasto')) {
+    return 'Presupuesto Operacional';
+  }
+
+  // Fallback heuristics based on account code and description
+  const cleanId = normalizeAccountKey(cuenta);
+  const nLower = String(nombre || '').toLowerCase();
+
+  if (
+    cleanId.startsWith('410') ||
+    cleanId === '4201010101' ||
+    nLower.includes('remunera') ||
+    nLower.includes('honorario') ||
+    nLower.includes('docente') ||
+    nLower.includes('malla') ||
+    nLower.includes('clinico')
+  ) {
+    return 'Presupuesto de Malla';
+  }
+
+  return 'Presupuesto Operacional';
+}
+
+/**
+ * Parses the dedicated 'Tipo de Presupuesto' sheet tab.
+ * Column A: Tipo de Presupuesto (strictly 2 types: Operacional and Malla - MANDATORY)
+ * Column B: Cuenta (associated account codes, including Remuneraciones and Honorarios)
+ * Column C: Descrip (official account description e.g. COMBUSTIBLES Y LUBRICANTES)
+ */
+export function parseTipoPresupuestoSheet(tipoPresupuestoRows?: any[][]): {
+  accountTipoMap: Map<string, string>;
+  accountDescMap: Map<string, string>;
+  discoveredTipos: string[];
+} {
+  const accountTipoMap = new Map<string, string>();
+  const accountDescMap = new Map<string, string>();
+  const canonicalTipos = ['Presupuesto Operacional', 'Presupuesto de Malla'];
+
+  if (!tipoPresupuestoRows || tipoPresupuestoRows.length === 0) {
+    return {
+      accountTipoMap,
+      accountDescMap,
+      discoveredTipos: canonicalTipos
+    };
+  }
+
+  // Detect header if present, or default to Col A (index 0), Col B (index 1), Col C (index 2)
+  let colTipo = 0;
+  let colCuenta = 1;
+  let colDesc = 2;
+  let headerIdx = -1;
+
+  for (let r = 0; r < Math.min(tipoPresupuestoRows.length, 3); r++) {
+    const rowClean = tipoPresupuestoRows[r].map(cleanHeader);
+    const foundTipoIdx = rowClean.findIndex(h => h.includes('tipo') || h.includes('presupuesto'));
+    const foundCuentaIdx = rowClean.findIndex(h => h.includes('cuenta') || h.includes('cod') || h.includes('id'));
+    const foundDescIdx = rowClean.findIndex(h => h.includes('descrip') || h.includes('nombre') || h.includes('detalle'));
+    if (foundTipoIdx !== -1 && foundCuentaIdx !== -1) {
+      headerIdx = r;
+      colTipo = foundTipoIdx;
+      colCuenta = foundCuentaIdx;
+      if (foundDescIdx !== -1) colDesc = foundDescIdx;
+      break;
+    }
+  }
+
+  const startRow = headerIdx !== -1 ? headerIdx + 1 : 0;
+
+  for (let r = startRow; r < tipoPresupuestoRows.length; r++) {
+    const row = tipoPresupuestoRows[r];
+    if (!row || row.length === 0) continue;
+
+    const rawTipo = String(row[colTipo] || '').trim();
+    const rawCuenta = String(row[colCuenta] || '').trim();
+    const rawDesc = colDesc !== -1 && row[colDesc] !== undefined ? String(row[colDesc] || '').trim() : '';
+
+    if (!rawTipo || !rawCuenta) continue;
+    // Skip if header values
+    if (cleanHeader(rawTipo).includes('tipo') && cleanHeader(rawCuenta).includes('cuenta')) continue;
+
+    const cleanCuentaKey = normalizeAccountKey(rawCuenta);
+    if (!cleanCuentaKey) continue;
+
+    // What Column A says commands the budget type (e.g. PRESUPUESTO OPERACIONAL -> Presupuesto Operacional)
+    const normalizedTipo = normalizeTipoPresupuesto(rawTipo, cleanCuentaKey, rawDesc);
+    accountTipoMap.set(cleanCuentaKey, normalizedTipo);
+    accountTipoMap.set(rawCuenta.trim(), normalizedTipo);
+
+    if (rawDesc) {
+      accountDescMap.set(cleanCuentaKey, rawDesc);
+      accountDescMap.set(rawCuenta.trim(), rawDesc);
+    }
+  }
+
+  return { accountTipoMap, accountDescMap, discoveredTipos: canonicalTipos };
+}
+
+/**
+ * Identify column for Tipo de Presupuesto
+ */
+function findTipoPresupuestoCol(headers: string[]): number {
+  let idx = headers.findIndex(h =>
+    h === 'tipodepresupuesto' || h === 'tipopresupuesto' || h === 'tipo' ||
+    h === 'tipodegasto' || h === 'tipogasto' || h === 'tipoppto' || h === 'tipopres'
+  );
+  if (idx !== -1) return idx;
+
+  return headers.findIndex(h =>
+    h.includes('tipo') && (h.includes('presupuesto') || h.includes('ppto') || h.includes('gasto') || h.includes('malla'))
+  );
 }
 
 /**
@@ -373,7 +589,7 @@ function findAccountDescCol(headers: string[]): number {
   // 1. Exact priority matches
   let idx = headers.findIndex(h =>
     h === 'descripcioncuenta' || h === 'denominacionclasedecoste' || h === 'denominacion' ||
-    h === 'descripcion' || h === 'descripcuenta' || h === 'nombrecuenta'
+    h === 'descripcion' || h === 'descripcuenta' || h === 'nombrecuenta' || h === 'descrip'
   );
   if (idx !== -1) return idx;
 
@@ -391,6 +607,9 @@ function findAccountDescCol(headers: string[]): number {
 function sanitizeAccountFields(rawCuenta: string, rawDesc: string): { cuenta: string; descripcion: string } {
   let c = String(rawCuenta || '').trim();
   let d = String(rawDesc || '').trim();
+
+  // Strip any school suffix if attached (e.g. 4202010106-odo -> 4202010106)
+  c = c.replace(/[-_](odo|obs|enf|kin|tec|med|salud|fac|doc|adm).*$/i, '').trim();
 
   // If cuenta has letters/spaces and desc is purely numeric code, they are inverted!
   const cuentaHasAlpha = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(c);
@@ -460,12 +679,13 @@ export function extractCecoFromRow(
 }
 
 /**
- * Parses raw 2D arrays from 'Ejecución', 'Plan' and 'Usuarios' sheets into structured BudgetAccount and MonthlyEvolution items
+ * Parses raw 2D arrays from 'Ejecución', 'Plan', 'Usuarios' and 'Tipo de Presupuesto' sheets
  */
 export function parseSheetData(
   ejecucionRows: any[][],
   planRows: any[][],
-  usuariosRows?: any[][]
+  usuariosRows?: any[][],
+  tipoPresupuestoRows?: any[][]
 ): {
   accounts: BudgetAccount[];
   monthlyEvolution: MonthlyEvolutionItem[];
@@ -474,8 +694,10 @@ export function parseSheetData(
   discoveredSchools: SchoolCecoInfo[];
   detectedCeco: string;
   detectedCecoName: string;
+  discoveredTipos: string[];
 } {
   const users = parseUsersSheet(usuariosRows);
+  const { accountTipoMap, accountDescMap, discoveredTipos } = parseTipoPresupuestoSheet(tipoPresupuestoRows);
 
   // 1. Process Ejecución Sheet first to discover ALL transactions and ALL official Centros de Costos from Col H & Col I
   const transactions: Transaction[] = [];
@@ -486,9 +708,9 @@ export function parseSheetData(
 
   if (ejecucionRows && ejecucionRows.length > 0) {
     let headerIdx = -1;
-    for (let r = 0; r < Math.min(ejecucionRows.length, 6); r++) {
+    for (let r = 0; r < Math.min(ejecucionRows.length, 10); r++) {
       const rowClean = ejecucionRows[r].map(cleanHeader);
-      if (rowClean.some(h => (h.includes('cuenta') || h.includes('clase')) && !h.includes('desc'))) {
+      if (rowClean.some(h => (h.includes('cuenta') || h.includes('clase') || h.includes('codigo') || h === 'id') && !h.includes('desc') && !h.includes('nom'))) {
         headerIdx = r;
         break;
       }
@@ -498,10 +720,31 @@ export function parseSheetData(
     const headers = ejecucionRows[headerIdx].map(cleanHeader);
     const colCuenta = findAccountCodeCol(headers);
     const colDesc = findAccountDescCol(headers);
-    const colFecha = headers.findIndex(h => h.includes('fecha'));
-    const colValor = headers.findIndex(h => h.includes('valor') || h.includes('importe') || h.includes('monto') || h.includes('total'));
-    const colGlosa = headers.findIndex(h => h.includes('glosa') && !h.includes('2'));
+    const colFecha = headers.findIndex(h => h.includes('fecha') || h === 'fec' || h.includes('date'));
+    
+    // Priority: exact matches for financial amount
+    let colValor = -1;
+    const exactValorHeaders = [
+      'valor', 'importe', 'monto', 'total', 'importetotal', 'valortotal',
+      'montototal', 'importeenml', 'valorenml', 'montoenml', 'impml',
+      'valorneto', 'valorliquido', 'ejecutado', 'consumo', 'gasto'
+    ];
+    colValor = headers.findIndex(h => exactValorHeaders.includes(h));
+
+    if (colValor === -1) {
+      colValor = headers.findIndex(h => 
+        (h.includes('valor') || h.includes('importe') || h.includes('monto') || h.includes('total') || h.includes('ejecut')) &&
+        !h.includes('tipo') && !h.includes('unitario') && !h.includes('cant') && 
+        !h.includes('moneda') && !h.includes('cambio') && !h.includes('tasa') && !h.includes('iva')
+      );
+    }
+    if (colValor === -1) {
+      colValor = headers.findIndex(h => h.includes('valor') || h.includes('importe') || h.includes('monto') || h.includes('total'));
+    }
+
+    const colGlosa = headers.findIndex(h => (h.includes('glosa') && !h.includes('2')) || h === 'texto' || h === 'concepto');
     const colGlosa2 = headers.findIndex(h => h.includes('glosa2') || h.includes('glosados'));
+    const colTipoEjec = findTipoPresupuestoCol(headers);
 
     // Header fallbacks if present
     const colCecoHeader = headers.findIndex(h => (h.includes('centro') && h.includes('coste') && !h.includes('desc')) || h === 'ceco');
@@ -518,7 +761,13 @@ export function parseSheetData(
       let rawDesc = colDesc !== -1 ? String(row[colDesc] || '').trim() : '';
 
       if (!rawCuenta && !rawDesc) continue;
-      if (cleanHeader(rawCuenta).includes('total') || cleanHeader(rawDesc).includes('total')) continue;
+      
+      const cleanC = cleanHeader(rawCuenta);
+      const cleanD = cleanHeader(rawDesc);
+      // Only skip if the row is purely a total/summary row, not if transaction description contains 'total'
+      if (cleanC === 'total' || cleanC.startsWith('total') || cleanD === 'total' || cleanD.startsWith('total general') || cleanD.startsWith('total consolidado') || cleanD.startsWith('total cuenta')) {
+        continue;
+      }
 
       const { cuenta, descripcion } = sanitizeAccountFields(rawCuenta, rawDesc);
       const finalCuenta = cuenta || descripcion;
@@ -561,6 +810,12 @@ export function parseSheetData(
       const glosa = colGlosa !== -1 ? String(row[colGlosa] || '').trim() : '';
       const glosa2 = colGlosa2 !== -1 ? String(row[colGlosa2] || '').trim() : '';
 
+      // Prioritize Tipo de Presupuesto from dedicated sheet tab if present
+      let tipoPresupuesto = accountTipoMap.get(cleanKey);
+      if (!tipoPresupuesto) {
+        tipoPresupuesto = normalizeTipoPresupuesto(colTipoEjec !== -1 ? row[colTipoEjec] : '', finalCuenta, descripcion);
+      }
+
       transactions.push({
         id: `tx-${r}`,
         cuenta: finalCuenta,
@@ -572,7 +827,8 @@ export function parseSheetData(
         ceco: finalCeco,
         descripCeco: finalDescCeco,
         mes,
-        monthIndex
+        monthIndex,
+        tipoPresupuesto
       });
     }
   }
@@ -607,6 +863,7 @@ export function parseSheetData(
     monthly: Record<string, number>;
     ceco?: string;
     descripCeco?: string;
+    tipoPresupuesto?: string;
   }
 
   const planCompoundMap: Record<string, PlanEntry> = {};
@@ -627,6 +884,9 @@ export function parseSheetData(
     const colCuenta = findAccountCodeCol(headers);
     const colName = findAccountDescCol(headers);
     const colTotal = headers.findIndex(h => h.includes('total') || h.includes('presupuesto') || h.includes('anual') || h.includes('plan'));
+    console.log('Headers:', headers);
+    console.log('Detected colTotal index:', colTotal);
+    const colTipo = findTipoPresupuestoCol(headers);
 
     // Check CECO in Plan: either via header or Col H (7) / Col I (8)
     let planColCeco = headers.findIndex(h => (h.includes('ceco') || h.includes('centro')) && !h.includes('desc'));
@@ -668,9 +928,9 @@ export function parseSheetData(
       if (!cuenta && !descripcion) continue;
 
       const finalId = cuenta || descripcion;
-      const finalName = descripcion || cuenta;
       const cleanKey = normalizeAccountKey(finalId);
       if (!cleanKey) continue;
+      const finalName = accountDescMap.get(cleanKey) || descripcion || cuenta;
 
       let ceco = planColCeco !== -1 ? String(row[planColCeco] || '').trim() : undefined;
       let descripCeco = planColDescCeco !== -1 ? String(row[planColDescCeco] || '').trim() : undefined;
@@ -682,24 +942,24 @@ export function parseSheetData(
           descripCeco = cecoInfo.descripCeco;
         }
       }
+      
+      // LOGGING
+      console.log(`Parsing Plan Row ${r}: Account ${finalId}, CECO detected: ${ceco}`);
+
+      // Column A in 'Tipo de Presupuesto' mandates budget type
+      let tipoPresupuesto = accountTipoMap.get(cleanKey);
+      if (!tipoPresupuesto) {
+        tipoPresupuesto = normalizeTipoPresupuesto(colTipo !== -1 ? row[colTipo] : '', finalId, finalName);
+      }
 
       let totalPlan = 0;
       const monthly: Record<string, number> = {};
-
-      if (monthColIndices.length > 0) {
-        monthColIndices.forEach(({ mes, idx }) => {
-          const val = parseFinancialNumber(row[idx]);
-          monthly[mes] = val;
-          totalPlan += val;
-        });
-      }
-
-      if (colTotal !== -1 && row[colTotal]) {
-        const directTotal = parseFinancialNumber(row[colTotal]);
-        if (directTotal > 0 || totalPlan === 0) {
-          totalPlan = directTotal;
-        }
-      }
+      
+      monthColIndices.forEach(({ mes, idx }) => {
+        const val = parseFinancialNumber(row[idx]);
+        monthly[mes] = val;
+        totalPlan += val;
+      });
 
       const planEntry: PlanEntry = {
         rawId: finalId,
@@ -707,18 +967,27 @@ export function parseSheetData(
         totalPlan,
         monthly,
         ceco,
-        descripCeco
+        descripCeco,
+        tipoPresupuesto
       };
 
       if (ceco) {
         const normCeco = normalizeAccountKey(ceco);
         const compoundKey = `${normCeco}_${cleanKey}`;
-        planCompoundMap[compoundKey] = planEntry;
-      }
-
-      // Fallback account-only map
-      if (!planAccountOnlyMap[cleanKey]) {
-        planAccountOnlyMap[cleanKey] = planEntry;
+        if (planCompoundMap[compoundKey]) {
+          const existing = planCompoundMap[compoundKey];
+          existing.totalPlan += planEntry.totalPlan;
+          Object.entries(planEntry.monthly).forEach(([mes, val]) => {
+            existing.monthly[mes] = (existing.monthly[mes] || 0) + val;
+          });
+        } else {
+          planCompoundMap[compoundKey] = planEntry;
+        }
+      } else {
+        // Fallback account-only map
+        if (!planAccountOnlyMap[cleanKey]) {
+          planAccountOnlyMap[cleanKey] = planEntry;
+        }
       }
     }
   }
@@ -730,14 +999,16 @@ export function parseSheetData(
   Object.entries(planCompoundMap).forEach(([compoundKey, p]) => {
     const ceco = p.ceco || detectedCeco;
     const descripCeco = p.descripCeco || (discoveredSchoolsMap.get(normalizeAccountKey(ceco))?.name) || detectedCecoName;
+    const cleanIdKey = normalizeAccountKey(p.rawId);
 
     accountsMap[compoundKey] = {
       id: p.rawId,
-      name: p.name,
+      name: accountDescMap.get(cleanIdKey) || p.name,
       presupuesto: p.totalPlan,
       ejecutado: 0,
       disponible: p.totalPlan,
       pct: 0,
+      tipoPresupuesto: accountTipoMap.get(cleanIdKey) || p.tipoPresupuesto || 'Presupuesto Operacional',
       monthlyPlan: { ...p.monthly },
       monthlyExec: {},
       transactions: [],
@@ -752,11 +1023,12 @@ export function parseSheetData(
       const compoundKey = `${normalizeAccountKey(detectedCeco)}_${cleanKey}`;
       accountsMap[compoundKey] = {
         id: p.rawId,
-        name: p.name,
+        name: accountDescMap.get(cleanKey) || p.name,
         presupuesto: p.totalPlan,
         ejecutado: 0,
         disponible: p.totalPlan,
         pct: 0,
+        tipoPresupuesto: accountTipoMap.get(cleanKey) || p.tipoPresupuesto || 'Presupuesto Operacional',
         monthlyPlan: { ...p.monthly },
         monthlyExec: {},
         transactions: [],
@@ -778,11 +1050,12 @@ export function parseSheetData(
 
       accountsMap[compoundKey] = {
         id: tx.cuenta,
-        name: tx.descripcion || matchedPlan?.name || tx.cuenta,
+        name: accountDescMap.get(cleanCuenta) || tx.descripcion || matchedPlan?.name || tx.cuenta,
         presupuesto: matchedPlan?.totalPlan || 0,
         ejecutado: 0,
         disponible: matchedPlan?.totalPlan || 0,
         pct: 0,
+        tipoPresupuesto: accountTipoMap.get(cleanCuenta) || matchedPlan?.tipoPresupuesto || tx.tipoPresupuesto || normalizeTipoPresupuesto('', tx.cuenta, tx.descripcion),
         monthlyPlan: matchedPlan ? { ...matchedPlan.monthly } : {},
         monthlyExec: {},
         transactions: [],
@@ -821,8 +1094,28 @@ export function parseSheetData(
   accountsList.sort((a, b) => b.presupuesto - a.presupuesto || b.ejecutado - a.ejecutado);
 
   // 4. Build Monthly Evolution (Ene - Dic)
+  // Per business rule, execution data is only recorded up to October (Nov and Dic have not been executed)
+  let lastExecutedMonthIdx = -1;
+  MONTH_NAMES_SHORT.forEach((mes, idx) => {
+    if (idx <= 9) {
+      const hasAnyExec = accountsList.some(acc => (acc.monthlyExec[mes] || 0) > 0);
+      if (hasAnyExec) {
+        lastExecutedMonthIdx = Math.max(lastExecutedMonthIdx, idx);
+      }
+    }
+  });
+  if (lastExecutedMonthIdx > 9) lastExecutedMonthIdx = 9;
+
   let planAcum = 0;
   let ejecAcum = 0;
+
+  const totalCalculated = accountsList.reduce((sum, acc) => sum + acc.presupuesto, 0);
+  const totalEjecutadoReal = accountsList.reduce((sum, acc) => sum + acc.ejecutado, 0);
+  console.log('DEBUG: Final consolidated budget total:', totalCalculated);
+  console.log('DEBUG: Final consolidated executed total:', totalEjecutadoReal);
+  console.log('DEBUG: User expected total:', 3441439237);
+  console.log('DEBUG: User expected executed:', 727819629);
+  console.log('DEBUG: Last executed month:', lastExecutedMonthIdx !== -1 ? MONTH_NAMES_SHORT[lastExecutedMonthIdx] : 'None');
 
   const monthlyEvolution: MonthlyEvolutionItem[] = MONTH_NAMES_SHORT.map((mes, idx) => {
     let mesPlan = 0;
@@ -834,7 +1127,11 @@ export function parseSheetData(
     });
 
     planAcum += mesPlan;
-    ejecAcum += mesEjec;
+    
+    const hasExecutionRecorded = lastExecutedMonthIdx !== -1 && idx <= lastExecutedMonthIdx;
+    if (hasExecutionRecorded) {
+      ejecAcum += mesEjec;
+    }
 
     return {
       mes,
@@ -842,9 +1139,11 @@ export function parseSheetData(
       plan: mesPlan,
       ejec: mesEjec,
       planAcum,
-      ejecAcum
+      ejecAcum: hasExecutionRecorded ? ejecAcum : null
     };
   });
+
+  console.log('Total presupuesto consolidado:', accountsList.reduce((sum, a) => sum + a.presupuesto, 0));
 
   return {
     accounts: accountsList,
@@ -853,7 +1152,8 @@ export function parseSheetData(
     users,
     discoveredSchools,
     detectedCeco,
-    detectedCecoName
+    detectedCecoName,
+    discoveredTipos
   };
 }
 
@@ -882,14 +1182,27 @@ export function filterDataByCeco(
 
     accounts.forEach(acc => {
       const key = normalizeAccountKey(acc.id);
+      const cleanId = key || acc.id;
       if (!consolidatedMap.has(key)) {
         consolidatedMap.set(key, {
           ...acc,
+          id: cleanId,
           ceco: 'TODOS',
           descripCeco: 'Consolidado Facultad',
+          tipoPresupuesto: acc.tipoPresupuesto || 'Presupuesto Operacional',
           monthlyPlan: { ...acc.monthlyPlan },
           monthlyExec: { ...acc.monthlyExec },
-          transactions: [...acc.transactions]
+          transactions: [...acc.transactions],
+          cecoBreakdown: [
+            {
+              ceco: acc.ceco || '',
+              descripCeco: acc.descripCeco || '',
+              presupuesto: acc.presupuesto,
+              ejecutado: acc.ejecutado,
+              disponible: acc.disponible,
+              pct: acc.pct
+            }
+          ]
         });
       } else {
         const exist = consolidatedMap.get(key)!;
@@ -898,6 +1211,16 @@ export function filterDataByCeco(
         exist.disponible = exist.presupuesto - exist.ejecutado;
         exist.pct = exist.presupuesto > 0 ? (exist.ejecutado / exist.presupuesto) * 100 : (exist.ejecutado > 0 ? 100 : 0);
         exist.transactions.push(...acc.transactions);
+
+        if (!exist.cecoBreakdown) exist.cecoBreakdown = [];
+        exist.cecoBreakdown.push({
+          ceco: acc.ceco || '',
+          descripCeco: acc.descripCeco || '',
+          presupuesto: acc.presupuesto,
+          ejecutado: acc.ejecutado,
+          disponible: acc.disponible,
+          pct: acc.pct
+        });
 
         Object.entries(acc.monthlyPlan).forEach(([m, val]) => {
           exist.monthlyPlan[m] = (exist.monthlyPlan[m] || 0) + val;
@@ -913,10 +1236,27 @@ export function filterDataByCeco(
   } else {
     const normTarget = normalizeAccountKey(targetCeco);
     filteredTx = transactions.filter(t => normalizeAccountKey(t.ceco) === normTarget || t.ceco === targetCeco);
-    filteredAcc = accounts.filter(a => normalizeAccountKey(a.ceco) === normTarget || a.ceco === targetCeco);
+    filteredAcc = accounts
+      .filter(a => normalizeAccountKey(a.ceco) === normTarget || a.ceco === targetCeco)
+      .map(a => ({
+        ...a,
+        id: normalizeAccountKey(a.id) || a.id
+      }));
   }
 
   // Recalculate monthly evolution for this filtered set
+  // Per business rule, execution data is only recorded up to October (Nov and Dic have not been executed)
+  let lastExecutedMonthIdx = -1;
+  MONTH_NAMES_SHORT.forEach((mes, idx) => {
+    if (idx <= 9) {
+      const hasAnyExec = filteredAcc.some(acc => (acc.monthlyExec[mes] || 0) > 0);
+      if (hasAnyExec) {
+        lastExecutedMonthIdx = Math.max(lastExecutedMonthIdx, idx);
+      }
+    }
+  });
+  if (lastExecutedMonthIdx > 9) lastExecutedMonthIdx = 9;
+
   let planAcum = 0;
   let ejecAcum = 0;
 
@@ -930,7 +1270,11 @@ export function filterDataByCeco(
     });
 
     planAcum += mesPlan;
-    ejecAcum += mesEjec;
+    
+    const hasExecutionRecorded = lastExecutedMonthIdx !== -1 && idx <= lastExecutedMonthIdx;
+    if (hasExecutionRecorded) {
+      ejecAcum += mesEjec;
+    }
 
     return {
       mes,
@@ -938,7 +1282,7 @@ export function filterDataByCeco(
       plan: mesPlan,
       ejec: mesEjec,
       planAcum,
-      ejecAcum
+      ejecAcum: hasExecutionRecorded ? ejecAcum : null
     };
   });
 

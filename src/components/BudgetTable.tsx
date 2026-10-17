@@ -4,7 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  ReceiptText
+  FileText
 } from 'lucide-react';
 import { BudgetAccount } from '../types';
 import { formatCLP, formatPct, getAccountStatus } from '../lib/formatters';
@@ -13,7 +13,6 @@ interface BudgetTableProps {
   accounts: BudgetAccount[];
   allAccounts: BudgetAccount[];
   useShortFormat: boolean;
-  usePercentOnlyMode?: boolean;
   ceco: string;
   cecoName?: string;
   onSelectAccount: (account: BudgetAccount) => void;
@@ -25,7 +24,6 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
   accounts,
   allAccounts,
   useShortFormat,
-  usePercentOnlyMode = false,
   ceco,
   cecoName,
   onSelectAccount
@@ -57,13 +55,10 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
       : (bVal as number) - (aVal as number);
   });
 
-  // Totals of selected / filtered accounts
-  const isFiltered = accounts.length !== allAccounts.length;
   const totalPresupuesto = accounts.reduce((sum, a) => sum + a.presupuesto, 0);
   const totalEjecutado = accounts.reduce((sum, a) => sum + a.ejecutado, 0);
   const totalDisponible = totalPresupuesto - totalEjecutado;
   const totalPct = totalPresupuesto > 0 ? (totalEjecutado / totalPresupuesto) * 100 : (totalEjecutado > 0 ? 100 : 0);
-  const totalDisponiblePct = totalPresupuesto > 0 ? (totalDisponible / totalPresupuesto) * 100 : 0;
 
   const renderSortIcon = (field: SortField) => {
     if (sortField !== field) {
@@ -80,20 +75,11 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
     <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs mb-6 overflow-hidden">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
         <div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-base sm:text-lg font-extrabold text-slate-900">
-              Detalle Oficial por Clase de Coste — {ceco === 'TODOS' ? 'Consolidado Facultad' : `CECO ${ceco}`}
-            </h2>
-            {usePercentOnlyMode && (
-              <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full border border-indigo-200">
-                🔒 Vista Exclusiva en % (Sin cifras monetarias)
-              </span>
-            )}
-          </div>
+          <h2 className="text-base sm:text-lg font-extrabold text-slate-900">
+            Detalle Oficial por Clase de Coste {ceco !== 'TODOS' && cecoName ? `— ${cecoName}` : ''}
+          </h2>
           <p className="text-xs text-slate-500 font-medium">
-            {usePercentOnlyMode
-              ? 'Presentación de avance presupuestario en porcentajes. Las cifras en pesos se encuentran ocultas.'
-              : 'N° de Cuenta vinculado a la Descripción de Cuenta entre Plan y Ejecución. Clic para ver desglose de transacciones.'}
+            N° de Cuenta vinculado a la Descripción de Cuenta entre Plan y Ejecución. Haz clic sobre cualquier cuenta para ver su desglose detallado.
           </p>
         </div>
         <span className="text-xs text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full font-semibold self-start sm:self-auto">
@@ -121,25 +107,23 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
                 Descripción Cuenta {renderSortIcon('name')}
               </th>
 
-              {/* Columna 3: Presupuesto (en % o en $) */}
+              {/* Columna 3: Presupuesto */}
               <th
                 onClick={() => handleSort('presupuesto')}
                 className="py-3 px-3.5 text-right cursor-pointer hover:bg-slate-200/70 transition-colors whitespace-nowrap"
               >
-                {usePercentOnlyMode ? '% Presupuesto' : 'Presupuesto'} {renderSortIcon('presupuesto')}
+                Presupuesto {renderSortIcon('presupuesto')}
               </th>
 
-              {/* Columna 4: Ejecutado (Solo se muestra en modo $, en modo % se omite como solicitó el usuario) */}
-              {!usePercentOnlyMode && (
-                <th
-                  onClick={() => handleSort('ejecutado')}
-                  className="py-3 px-3.5 text-right cursor-pointer hover:bg-slate-200/70 transition-colors whitespace-nowrap"
-                >
-                  Ejecutado {renderSortIcon('ejecutado')}
-                </th>
-              )}
+              {/* Columna 4: Ejecutado */}
+              <th
+                onClick={() => handleSort('ejecutado')}
+                className="py-3 px-3.5 text-right cursor-pointer hover:bg-slate-200/70 transition-colors whitespace-nowrap"
+              >
+                Ejecutado {renderSortIcon('ejecutado')}
+              </th>
 
-              {/* Columna 5: % Avance de Ejecución (o % Ejecución) */}
+              {/* Columna 5: % Avance de Ejecución */}
               <th
                 onClick={() => handleSort('pct')}
                 className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/70 transition-colors min-w-[140px]"
@@ -147,12 +131,12 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
                 % Avance Ejecución {renderSortIcon('pct')}
               </th>
 
-              {/* Columna 6: Saldo Disponible (en % o en $) */}
+              {/* Columna 6: Saldo Disponible */}
               <th
                 onClick={() => handleSort('disponible')}
                 className="py-3 px-3.5 text-right cursor-pointer hover:bg-slate-200/70 transition-colors whitespace-nowrap"
               >
-                {usePercentOnlyMode ? '% Saldo Disponible' : 'Disponible'} {renderSortIcon('disponible')}
+                Disponible {renderSortIcon('disponible')}
               </th>
 
               {/* Columna 7: Estado */}
@@ -164,7 +148,7 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
           <tbody className="divide-y divide-slate-100">
             {sortedAccounts.length === 0 ? (
               <tr>
-                <td colSpan={usePercentOnlyMode ? 6 : 7} className="py-12 text-center text-slate-400 font-medium">
+                <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <AlertCircle className="w-8 h-8 text-slate-300" />
                     <p>No se encontraron cuentas contables coincidentes con los filtros aplicados.</p>
@@ -186,47 +170,40 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
                   progressColorClass = 'bg-sky-500';
                 }
 
-                // Percent of school budget for this account
-                const pctOfTotalBudget = totalPresupuesto > 0
-                  ? ((account.presupuesto / totalPresupuesto) * 100).toFixed(1).replace('.', ',') + '%'
-                  : '0%';
-                const pctOfTotalDisp = totalPresupuesto > 0
-                  ? ((account.disponible / totalPresupuesto) * 100).toFixed(1).replace('.', ',') + '%'
-                  : '0%';
-
                 return (
                   <tr
-                    key={account.id}
+                    key={`${account.ceco || ''}_${account.id}`}
                     onClick={() => onSelectAccount(account)}
                     className="hover:bg-sky-50/60 transition-colors cursor-pointer group"
-                    title="Clic para ver detalle de glosas y facturas"
+                    title="Clic para ver detalle de la cuenta, plan y transacciones"
                   >
-                    {/* N° de Cuenta */}
-                    <td className="py-3 px-3.5 font-bold text-slate-900 group-hover:text-sky-700 whitespace-nowrap flex items-center gap-1.5">
-                      <span>{account.id}</span>
-                      {account.transactions.length > 0 && (
-                        <ReceiptText className="w-3.5 h-3.5 text-slate-400 group-hover:text-sky-600 shrink-0" />
-                      )}
+                    {/* N° de Cuenta con icono interactivo visible siempre */}
+                    <td className="py-3 px-3.5 font-bold text-slate-900 group-hover:text-sky-700 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono">{account.id}</span>
+                        <span
+                          className="inline-flex items-center justify-center w-5 h-5 rounded bg-sky-100/70 text-sky-700 group-hover:bg-sky-600 group-hover:text-white transition-colors shrink-0"
+                          title="Ver detalle oficial de la cuenta"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                        </span>
+                      </div>
                     </td>
 
                     {/* Descripción Cuenta */}
                     <td className="py-3 px-3.5 font-semibold text-slate-800">
-                      {account.name}
+                      <span>{account.name}</span>
                     </td>
 
                     {/* Presupuesto */}
                     <td className="py-3 px-3.5 text-right font-medium text-slate-600 whitespace-nowrap tabular-nums">
-                      {usePercentOnlyMode
-                        ? pctOfTotalBudget
-                        : formatCLP(account.presupuesto, useShortFormat)}
+                      {formatCLP(account.presupuesto, useShortFormat)}
                     </td>
 
-                    {/* Ejecutado ($) solo en modo normal */}
-                    {!usePercentOnlyMode && (
-                      <td className="py-3 px-3.5 text-right font-bold text-sky-800 whitespace-nowrap tabular-nums">
-                        {formatCLP(account.ejecutado, useShortFormat)}
-                      </td>
-                    )}
+                    {/* Ejecutado */}
+                    <td className="py-3 px-3.5 text-right font-bold text-sky-800 whitespace-nowrap tabular-nums">
+                      {formatCLP(account.ejecutado, useShortFormat)}
+                    </td>
 
                     {/* % Avance Ejecución con barra */}
                     <td className="py-3 px-3.5">
@@ -251,16 +228,12 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
                         account.disponible < 0 ? 'text-red-600' : 'text-emerald-700'
                       }`}
                     >
-                      {usePercentOnlyMode
-                        ? pctOfTotalDisp
-                        : formatCLP(account.disponible, useShortFormat)}
+                      {formatCLP(account.disponible, useShortFormat)}
                     </td>
 
                     {/* Estado */}
                     <td className="py-3 px-3.5 text-center">
-                      <span
-                        className={`inline-block px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border ${status.bgClass} ${status.textClass} ${status.borderClass}`}
-                      >
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${status.bgClass} ${status.textClass} ${status.borderClass}`}>
                         {status.label}
                       </span>
                     </td>
@@ -269,64 +242,39 @@ export const BudgetTable: React.FC<BudgetTableProps> = ({
               })
             )}
           </tbody>
-          <tfoot>
-            <tr className="bg-slate-100/90 font-extrabold border-t-2 border-slate-300 text-slate-900">
-              <td colSpan={2} className="py-4 px-3.5 text-sm sm:text-base">
-                {isFiltered ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span>TOTAL SELECCIÓN</span>
-                    <span className="text-xs bg-sky-100 text-sky-800 font-bold px-2 py-0.5 rounded-full">
-                      {accounts.length} {accounts.length === 1 ? 'cuenta' : 'cuentas'}
-                    </span>
-                  </div>
-                ) : (
-                  <span>TOTAL CONSOLIDADO {ceco === 'TODOS' ? 'FACULTAD' : (cecoName ? cecoName.toUpperCase() : `CECO ${ceco}`)}</span>
-                )}
-              </td>
 
-              {/* Presupuesto total */}
-              <td className="py-4 px-3.5 text-right text-sm sm:text-base whitespace-nowrap tabular-nums">
-                {usePercentOnlyMode ? '100,0%' : formatCLP(totalPresupuesto, useShortFormat)}
-              </td>
-
-              {/* Ejecutado ($) solo en modo normal */}
-              {!usePercentOnlyMode && (
-                <td className="py-4 px-3.5 text-right text-sm sm:text-base text-[#0369a1] whitespace-nowrap tabular-nums">
+          {/* Fila de Totales */}
+          {sortedAccounts.length > 0 && (
+            <tfoot>
+              <tr className="bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-300">
+                <td className="py-3.5 px-3.5">TOTALES</td>
+                <td className="py-3.5 px-3.5 text-xs text-slate-500 font-semibold">
+                  {sortedAccounts.length} cuentas listadas
+                </td>
+                <td className="py-3.5 px-3.5 text-right whitespace-nowrap tabular-nums font-black">
+                  {formatCLP(totalPresupuesto, useShortFormat)}
+                </td>
+                <td className="py-3.5 px-3.5 text-right text-sky-800 whitespace-nowrap tabular-nums font-black">
                   {formatCLP(totalEjecutado, useShortFormat)}
                 </td>
-              )}
-
-              {/* % Avance total */}
-              <td className="py-4 px-3.5 text-sm sm:text-base tabular-nums font-extrabold text-sky-800">
-                {formatPct(totalPct)}
-              </td>
-
-              {/* Saldo disponible total */}
-              <td
-                className={`py-4 px-3.5 text-right text-sm sm:text-base whitespace-nowrap tabular-nums ${
-                  totalDisponible < 0 ? 'text-red-600' : 'text-emerald-700'
-                }`}
-              >
-                {usePercentOnlyMode ? formatPct(totalDisponiblePct) : formatCLP(totalDisponible, useShortFormat)}
-              </td>
-
-              <td className="py-4 px-3.5 text-center">
-                <span className={`inline-block px-3 py-1 rounded-md text-xs font-black ${
-                  totalDisponible < 0 || totalPct > 100
-                    ? 'bg-red-100 text-red-800 border border-red-300'
-                    : totalPct > 80
-                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                }`}>
-                  {totalDisponible < 0 || totalPct > 100
-                    ? 'SOBREGIRO'
-                    : totalPct > 80
-                    ? 'ALTA EJECUCIÓN'
-                    : 'EJECUCIÓN NORMAL'}
-                </span>
-              </td>
-            </tr>
-          </tfoot>
+                <td className="py-3.5 px-3.5 whitespace-nowrap">
+                  <span className="font-extrabold text-xs text-slate-800">
+                    {formatPct(totalPct)}
+                  </span>
+                </td>
+                <td
+                  className={`py-3.5 px-3.5 text-right whitespace-nowrap tabular-nums font-black ${
+                    totalDisponible < 0 ? 'text-red-600' : 'text-emerald-700'
+                  }`}
+                >
+                  {formatCLP(totalDisponible, useShortFormat)}
+                </td>
+                <td className="py-3.5 px-3.5 text-center text-xs font-semibold text-slate-500">
+                  Resumen
+                </td>
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>

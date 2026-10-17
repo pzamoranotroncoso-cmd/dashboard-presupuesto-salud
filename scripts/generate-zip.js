@@ -13,7 +13,8 @@ const includeFiles = [
   'vite.config.ts',
   'index.html',
   'firebase-applet-config.json',
-  'metadata.json'
+  'metadata.json',
+  'vercel.json'
 ];
 
 const includeDirs = ['src', 'public'];

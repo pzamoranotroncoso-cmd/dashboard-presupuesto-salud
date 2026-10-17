@@ -20,12 +20,12 @@ import {
   DEMO_MONTHS
 } from './lib/demoData';
 import { Header } from './components/Header';
-import { SyncBanner } from './components/SyncBanner';
 import { FilterBar } from './components/FilterBar';
 import { KpiCards } from './components/KpiCards';
 import { ChartsSection } from './components/ChartsSection';
 import { BudgetTable } from './components/BudgetTable';
 import { TransactionModal } from './components/TransactionModal';
+import { FileSelectorModal } from './components/FileSelectorModal';
 import { AccessDeniedScreen } from './components/AccessDeniedScreen';
 import { LoginScreen } from './components/LoginScreen';
 import {
@@ -35,7 +35,8 @@ import {
   Transaction,
   SchoolCecoInfo,
   SyncStatus,
-  StatusFilterType
+  StatusFilterType,
+  GoogleDriveFile
 } from './types';
 import { CheckCircle2, AlertTriangle, ShieldCheck, Lock } from 'lucide-react';
 
@@ -60,8 +61,10 @@ export default function App() {
   // Active CECO filter: MUST default to 'TODOS' (Consolidado General Facultad)
   const [selectedCeco, setSelectedCeco] = useState<string>('TODOS');
 
-  // View presentation mode: Percentage-only mode (Requisito solicitado)
-  const [usePercentOnlyMode, setUsePercentOnlyMode] = useState<boolean>(false);
+  // Tipo de Presupuesto filter (strictly 2 types: Presupuesto Operacional and Presupuesto de Malla, or TODOS)
+  const [selectedTipoPresupuesto, setSelectedTipoPresupuesto] = useState<string>('TODOS');
+
+  // Number format toggle ($M vs $ CLP completo)
   const [useShortFormat, setUseShortFormat] = useState<boolean>(true);
 
   // Filter Bar state
@@ -70,13 +73,18 @@ export default function App() {
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState('ALL');
 
-  // Reset account filter when CECO changes
+  // Reset account filter when CECO or Tipo de Presupuesto changes
   useEffect(() => {
     setSelectedAccounts([]);
-  }, [selectedCeco]);
+  }, [selectedCeco, selectedTipoPresupuesto]);
 
   // Modal for account transactions drilldown
   const [selectedAccountForTx, setSelectedAccountForTx] = useState<BudgetAccount | null>(null);
+  
+  // File selection modal
+  const [isFileModalOpen, setIsFileModalOpen] = useState(false);
+  const [availableFiles, setAvailableFiles] = useState<GoogleDriveFile[]>([]);
+  const [isRefreshingFiles, setIsRefreshingFiles] = useState(false);
 
   // Sync state (100% silent & automatic)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
@@ -126,7 +134,12 @@ export default function App() {
     let matched = currentUsers.find(u => u.correo.toLowerCase().trim() === cleanEmail);
 
     // Fail-safe: Patricio Zamorano is always granted ADMIN access
-    if (!matched && (cleanEmail === 'patricio.zamorano@mail.udp.cl' || cleanEmail.startsWith('patricio.zamorano'))) {
+    if (!matched && (
+      cleanEmail === 'patricio.zamorano@mail.udp.cl' ||
+      cleanEmail.startsWith('patricio.zamorano') ||
+      cleanEmail === 'pzamorano.troncoso@gmail.com' ||
+      cleanEmail.includes('zamorano')
+    )) {
       matched = {
         correo: cleanEmail,
         nombre: 'Patricio Zamorano',
@@ -143,6 +156,20 @@ export default function App() {
         correo: cleanEmail,
         nombre: 'Dr. Decano de Facultad',
         cargo: 'Decano',
+        rol: 'ADMIN',
+        ceco: 'TODOS',
+        escuela: 'Facultad de Salud y Odontología'
+      };
+    }
+
+    // If UDP institutional email not in list, grant access to General Faculty or Director
+    if (!matched && (cleanEmail.endsWith('@mail.udp.cl') || cleanEmail.endsWith('@udp.cl'))) {
+      const namePart = cleanEmail.split('@')[0].replace('.', ' ');
+      const capitalized = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+      matched = {
+        correo: cleanEmail,
+        nombre: capitalized,
+        cargo: 'Autoridad / Directivo UDP',
         rol: 'ADMIN',
         ceco: 'TODOS',
         escuela: 'Facultad de Salud y Odontología'
@@ -202,11 +229,11 @@ export default function App() {
   const loadSpreadsheet = useCallback(async (fileId: string, currentToken: string, knownName?: string) => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
-
     setSyncStatus(prev => ({ ...prev, state: 'syncing', error: null }));
 
     try {
       const fileMeta = await getFileMetadata(currentToken, fileId);
+      
       const { ejecucionRows, planRows, usuariosRows } = await fetchSpreadsheetData(currentToken, fileId);
 
       const parsed = parseSheetData(ejecucionRows, planRows, usuariosRows);
@@ -260,7 +287,7 @@ export default function App() {
 
       showToast(`Sincronización silenciosa completada: ${fileMeta.name}`);
     } catch (err: any) {
-      console.error('Error al sincronizar Google Sheets:', err);
+      console.error('Error crítico al sincronizar Google Sheets:', err);
       setSyncStatus(prev => ({
         ...prev,
         state: 'error',
@@ -271,28 +298,31 @@ export default function App() {
     }
   }, [resolveUserProfile, user?.email]);
 
-  // 4. Auto-discover target spreadsheet on login
   const discoverAndConnectFile = useCallback(async (currentToken: string) => {
     try {
-      const files = await searchSpreadsheets(currentToken, 'Obstetricia');
-
+      const files = await searchSpreadsheets(currentToken, 'Ejecución');
+      
+      // More permissive matching: find first file containing 'Ejecución' and '2026'
       let targetFile = files.find(
-        f => f.name.toLowerCase().trim() === TARGET_SHEET_DEFAULT_NAME.toLowerCase().trim()
+        f => f.name.toLowerCase().includes('ejecución') && f.name.toLowerCase().includes('2026')
       );
 
+      // Fallback: find first file containing 'Ejecución'
       if (!targetFile) {
-        targetFile = files.find(f => f.name.toLowerCase().includes('obstetricia'));
+        targetFile = files.find(f => f.name.toLowerCase().includes('ejecución'));
       }
 
+      // Fallback: if all else fails, use the first file found in the search results
       if (!targetFile && files.length > 0) {
         targetFile = files[0];
       }
 
       if (targetFile) {
         await loadSpreadsheet(targetFile.id, currentToken, targetFile.name);
+      } else {
       }
     } catch (err: any) {
-      console.warn('Búsqueda inicial de archivo:', err);
+      console.error('Búsqueda inicial de archivo fallida:', err);
     }
   }, [loadSpreadsheet]);
 
@@ -301,6 +331,19 @@ export default function App() {
       discoverAndConnectFile(token);
     }
   }, [token, discoverAndConnectFile]);
+
+  const refreshFiles = useCallback(async (currentToken: string) => {
+    setIsRefreshingFiles(true);
+    try {
+      const files = await searchSpreadsheets(currentToken, ''); // Search all
+      setAvailableFiles(files);
+    } catch (err: any) {
+      console.error('Error refreshing files:', err);
+      showToast('Error al buscar archivos en Drive');
+    } finally {
+      setIsRefreshingFiles(false);
+    }
+  }, []);
 
   // 5. Silent Automatic Polling Engine (Requisito: Sincronización 100% silenciosa)
   useEffect(() => {
@@ -410,10 +453,43 @@ export default function App() {
     };
   }, [rawAccounts, rawTransactions, selectedCeco, currentUserProfile, schoolsList]);
 
-  // Available unique accounts for the current active school/CECO
+  // Available budget types across current accounts: STRICTLY TWO TYPES
+  const availableTiposPresupuesto = useMemo(() => {
+    const tipos = new Set<string>();
+    currentAccounts.forEach(a => {
+      if (a.tipoPresupuesto) tipos.add(a.tipoPresupuesto.trim());
+    });
+    if (tipos.size === 0) {
+      return ['Presupuesto Operacional', 'Presupuesto de Malla'];
+    }
+    const list = Array.from(tipos);
+    const op = list.find(t => t.toLowerCase().includes('operac')) || 'Presupuesto Operacional';
+    const ma = list.find(t => t.toLowerCase().includes('malla') || t.toLowerCase().includes('curricul') || t.toLowerCase().includes('docen')) || 'Presupuesto de Malla';
+    return [op, ma];
+  }, [currentAccounts]);
+
+  // Accounts filtered by selected Tipo de Presupuesto (prior to choosing account)
+  const budgetTypeAccounts = useMemo(() => {
+    if (selectedTipoPresupuesto === 'TODOS') {
+      return currentAccounts;
+    }
+    const sel = selectedTipoPresupuesto.toLowerCase().trim();
+    const isSelOperac = sel.includes('operac');
+    const isSelMalla = sel.includes('malla') || sel.includes('curricul') || sel.includes('docen');
+
+    return currentAccounts.filter(a => {
+      const tipo = (a.tipoPresupuesto || 'Presupuesto Operacional').toLowerCase().trim();
+      if (tipo === sel) return true;
+      if (isSelOperac && tipo.includes('operac')) return true;
+      if (isSelMalla && (tipo.includes('malla') || tipo.includes('curricul') || tipo.includes('docen'))) return true;
+      return false;
+    });
+  }, [currentAccounts, selectedTipoPresupuesto]);
+
+  // Available unique accounts strictly for the current active school and selected Tipo de Presupuesto
   const accountOptions = useMemo(() => {
     const map = new Map<string, string>();
-    currentAccounts.forEach(acc => {
+    budgetTypeAccounts.forEach(acc => {
       if (acc.id && !map.has(acc.id)) {
         map.set(acc.id, acc.name);
       }
@@ -421,11 +497,54 @@ export default function App() {
     return Array.from(map.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.id.localeCompare(b.id));
-  }, [currentAccounts]);
+  }, [budgetTypeAccounts]);
+
+  // Monthly Evolution adapted to the selected budget type so charts are not distorted
+  const activeMonthlyEvolution = useMemo(() => {
+    if (selectedTipoPresupuesto === 'TODOS') {
+      return currentMonthlyEvolution;
+    }
+    let lastExecutedMonthIdx = -1;
+    DEMO_MONTHS.forEach((mes, idx) => {
+      if (idx <= 9) {
+        const hasAnyExec = budgetTypeAccounts.some(acc => (acc.monthlyExec[mes] || 0) > 0);
+        if (hasAnyExec) {
+          lastExecutedMonthIdx = Math.max(lastExecutedMonthIdx, idx);
+        }
+      }
+    });
+    if (lastExecutedMonthIdx > 9) lastExecutedMonthIdx = 9;
+
+    let planAcum = 0;
+    let ejecAcum = 0;
+    return DEMO_MONTHS.map((mes, idx) => {
+      let mesPlan = 0;
+      let mesEjec = 0;
+      budgetTypeAccounts.forEach(acc => {
+        mesPlan += acc.monthlyPlan[mes] || 0;
+        mesEjec += acc.monthlyExec[mes] || 0;
+      });
+      planAcum += mesPlan;
+
+      const hasExecutionRecorded = lastExecutedMonthIdx !== -1 && idx <= lastExecutedMonthIdx;
+      if (hasExecutionRecorded) {
+        ejecAcum += mesEjec;
+      }
+      const matchedItem = currentMonthlyEvolution.find(m => m.mes === mes);
+      return {
+        mes,
+        mesNombre: matchedItem?.mesNombre || mes,
+        plan: mesPlan,
+        ejec: mesEjec,
+        planAcum,
+        ejecAcum: hasExecutionRecorded ? ejecAcum : null
+      };
+    });
+  }, [budgetTypeAccounts, currentMonthlyEvolution, selectedTipoPresupuesto]);
 
   // Step 5: Filter Bar adjustments (search, status, account, month)
   const filteredAccounts = useMemo(() => {
-    return currentAccounts
+    return budgetTypeAccounts
       .map(acc => {
         if (selectedMonth !== 'ALL') {
           const mPlan = acc.monthlyPlan[selectedMonth] || 0;
@@ -470,7 +589,7 @@ export default function App() {
 
         return matchSearch && matchStatus && matchAccount;
       });
-  }, [currentAccounts, searchTerm, statusFilter, selectedAccounts, selectedMonth]);
+  }, [budgetTypeAccounts, searchTerm, statusFilter, selectedAccounts, selectedMonth]);
 
   // 1. If verifying Firebase auth session on startup
   if (isAuthInitializing) {
@@ -527,63 +646,58 @@ export default function App() {
         syncStatus={syncStatus}
         ceco={selectedCeco}
         cecoName={activeSchoolName}
-        periodLabel="Cierre a Agosto 2026"
+        periodLabel=""
         schools={schoolsList}
         onSelectCeco={setSelectedCeco}
         onLogin={handleLogin}
         onLogout={handleLogout}
         isLoggingIn={isLoggingIn}
         onShowToast={showToast}
+        onOpenSelector={() => {
+            setIsFileModalOpen(true);
+            refreshFiles(token!);
+        }}
       />
 
-      {/* Real-time Google Sheets Silent Sync Banner (without confusing buttons) */}
-      <SyncBanner
-        syncStatus={syncStatus}
-        isAdmin={currentUserProfile?.rol === 'ADMIN'}
-        onLogin={handleLogin}
-      />
-
-      {/* Filter and View Options (includes the new % Mode button and Account filter) */}
+      {/* Filter and View Options (includes Tipo de Presupuesto filter and Account selector) */}
       <FilterBar
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
+        selectedTipoPresupuesto={selectedTipoPresupuesto}
+        onSelectedTipoPresupuestoChange={setSelectedTipoPresupuesto}
+        availableTiposPresupuesto={availableTiposPresupuesto}
         selectedAccounts={selectedAccounts}
         onSelectedAccountsChange={setSelectedAccounts}
         accountOptions={accountOptions}
         selectedMonth={selectedMonth}
         onSelectedMonthChange={setSelectedMonth}
-        availableMonths={DEMO_MONTHS.slice(0, 8)}
+        availableMonths={DEMO_MONTHS}
         useShortFormat={useShortFormat}
         onToggleFormat={() => setUseShortFormat(prev => !prev)}
-        usePercentOnlyMode={usePercentOnlyMode}
-        onTogglePercentMode={() => setUsePercentOnlyMode(prev => !prev)}
       />
 
-      {/* KPI Cards (respects %-only mode) */}
+      {/* KPI Cards */}
       <KpiCards
-        accounts={currentAccounts}
+        accounts={budgetTypeAccounts}
         filteredAccounts={filteredAccounts}
         useShortFormat={useShortFormat}
-        usePercentOnlyMode={usePercentOnlyMode}
         ceco={selectedCeco}
       />
 
-      {/* Charts Section (respects %-only mode) */}
+      {/* Charts Section */}
       <ChartsSection
         accounts={filteredAccounts}
-        monthlyEvolution={currentMonthlyEvolution}
+        monthlyEvolution={activeMonthlyEvolution}
         useShortFormat={useShortFormat}
-        usePercentOnlyMode={usePercentOnlyMode}
       />
 
-      {/* Budget Table with Drilldown and Percent Mode */}
+      {/* Budget Table with Drilldown */}
       <BudgetTable
         accounts={filteredAccounts}
-        allAccounts={currentAccounts}
+        allAccounts={budgetTypeAccounts}
         useShortFormat={useShortFormat}
-        usePercentOnlyMode={usePercentOnlyMode}
         ceco={selectedCeco}
         cecoName={activeSchoolName}
         onSelectAccount={account => setSelectedAccountForTx(account)}
@@ -602,6 +716,19 @@ export default function App() {
         account={selectedAccountForTx}
         onClose={() => setSelectedAccountForTx(null)}
         useShortFormat={useShortFormat}
+      />
+
+      {/* File Selector Modal */}
+      <FileSelectorModal
+        isOpen={isFileModalOpen}
+        onClose={() => setIsFileModalOpen(false)}
+        files={availableFiles}
+        selectedFileId={syncStatus.fileId}
+        onSelectFile={(id, name) => {
+            loadSpreadsheet(id, token!, name);
+        }}
+        isLoading={isRefreshingFiles}
+        onRefreshDrive={() => refreshFiles(token!)}
       />
     </main>
   );

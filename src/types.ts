@@ -26,6 +26,7 @@ export interface Transaction {
   descripCeco: string;
   mes: string;
   monthIndex: number;
+  tipoPresupuesto?: string;
 }
 
 export interface BudgetAccount {
@@ -35,11 +36,20 @@ export interface BudgetAccount {
   ejecutado: number;
   disponible: number;
   pct: number;
+  tipoPresupuesto?: string;
   monthlyPlan: Record<string, number>;
   monthlyExec: Record<string, number>;
   transactions: Transaction[];
   ceco?: string;
   descripCeco?: string;
+  cecoBreakdown?: Array<{
+    ceco: string;
+    descripCeco: string;
+    presupuesto: number;
+    ejecutado: number;
+    disponible: number;
+    pct: number;
+  }>;
 }
 
 export interface MonthlyEvolutionItem {
@@ -48,7 +58,7 @@ export interface MonthlyEvolutionItem {
   plan: number;
   ejec: number;
   planAcum: number;
-  ejecAcum: number;
+  ejecAcum: number | null;
 }
 
 export interface GoogleDriveFile {

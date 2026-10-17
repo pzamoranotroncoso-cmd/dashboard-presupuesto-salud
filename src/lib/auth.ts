@@ -10,13 +10,12 @@ import {
 
 // Configuración oficial Firebase de presupuesto-udp (Patricio Zamorano)
 const firebaseConfig = {
-  apiKey: "AIzaSyD-zdhF2ofBBcSPVfQ-O6L5OrdhXAgT9a8",
-  authDomain: "presupuesto-udp.firebaseapp.com",
-  projectId: "presupuesto-udp",
-  storageBucket: "presupuesto-udp.firebasestorage.app",
-  messagingSenderId: "106538505691",
-  appId: "1:106538505691:web:2a171a90c2f6e1a73903fe",
-  measurementId: "G-ZZNVMZJ861"
+  apiKey: "AIzaSyAibkUmWm995IPLPNrJEQIT4MH1pjp_mBQ",
+  authDomain: "concentrated-surface-1nm9t.firebaseapp.com",
+  projectId: "concentrated-surface-1nm9t",
+  storageBucket: "concentrated-surface-1nm9t.firebasestorage.app",
+  messagingSenderId: "105701402266",
+  appId: "1:105701402266:web:3945b85ffff9af73dda123"
 };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -27,6 +26,9 @@ const provider = new GoogleAuthProvider();
 provider.setCustomParameters({
   prompt: 'select_account'
 });
+provider.addScope('https://www.googleapis.com/auth/drive.readonly');
+provider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly');
+
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = typeof window !== 'undefined' ? sessionStorage.getItem('google_access_token') : null;
