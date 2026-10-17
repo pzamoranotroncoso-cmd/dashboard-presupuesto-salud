@@ -300,6 +300,19 @@ export default function App() {
 
   const discoverAndConnectFile = useCallback(async (currentToken: string) => {
     try {
+      // 1. If user previously connected to a file ID, load it directly
+      const lastFileId = localStorage.getItem('last_budget_sheet_id');
+      const lastFileName = localStorage.getItem('last_budget_sheet_name');
+      if (lastFileId) {
+        try {
+          await loadSpreadsheet(lastFileId, currentToken, lastFileName || 'Presupuesto Conectado');
+          return;
+        } catch (prevLoadErr) {
+          console.warn('No se pudo cargar el archivo previamente seleccionado, buscando en Drive...', prevLoadErr);
+        }
+      }
+
+      // 2. Search for spreadsheets in Drive
       const files = await searchSpreadsheets(currentToken, 'Ejecución');
       
       // More permissive matching: find first file containing 'Ejecución' and '2026'
@@ -319,10 +332,9 @@ export default function App() {
 
       if (targetFile) {
         await loadSpreadsheet(targetFile.id, currentToken, targetFile.name);
-      } else {
       }
     } catch (err: any) {
-      console.error('Búsqueda inicial de archivo fallida:', err);
+      console.warn('Búsqueda inicial de archivo en Google Drive:', err);
     }
   }, [loadSpreadsheet]);
 

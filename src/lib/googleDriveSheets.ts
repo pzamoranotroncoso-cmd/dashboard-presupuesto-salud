@@ -8,6 +8,8 @@ import {
 } from '../types';
 import { DEFAULT_USERS, DEMO_CECO, DEMO_CECO_NAME } from './demoData';
 
+import { isValidGoogleAccessToken } from './auth';
+
 export const TARGET_SHEET_DEFAULT_NAME = "Ejecución Presupuestaria 2026";
 
 export const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
@@ -23,6 +25,10 @@ export async function searchSpreadsheets(
   accessToken: string,
   searchQuery: string = "Obstetricia"
 ): Promise<GoogleDriveFile[]> {
+  if (!isValidGoogleAccessToken(accessToken)) {
+    return [];
+  }
+
   const query = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
     query
@@ -34,6 +40,18 @@ export async function searchSpreadsheets(
 
   if (!res.ok) {
     const errText = await res.text();
+    if (res.status === 401) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('google_access_token');
+      }
+      throw new Error(`AUTH_EXPIRED: Token no válido o expirado`);
+    }
+    if (res.status === 403) {
+      if (errText.includes('Google Drive API has not been used') || errText.includes('accessNotConfigured')) {
+        throw new Error(`DRIVE_API_NOT_ENABLED: La API de Google Drive debe habilitarse en Google Cloud Console para el proyecto presupuesto-udp (106538505691).`);
+      }
+      throw new Error(`DRIVE_PERMISSION_DENIED: Permisos insuficientes para acceder a Drive.`);
+    }
     throw new Error(`Error buscando archivos en Google Drive (${res.status}): ${errText}`);
   }
 
@@ -60,6 +78,10 @@ export async function getFileMetadata(
   accessToken: string,
   fileId: string
 ): Promise<GoogleDriveFile> {
+  if (!isValidGoogleAccessToken(accessToken)) {
+    throw new Error('AUTH_EXPIRED: Token no válido para metadatos.');
+  }
+
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,modifiedTime,version,webViewLink`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -67,6 +89,15 @@ export async function getFileMetadata(
 
   if (!res.ok) {
     const errText = await res.text();
+    if (res.status === 401) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('google_access_token');
+      }
+      throw new Error(`AUTH_EXPIRED: Token expirado al obtener metadatos.`);
+    }
+    if (res.status === 403) {
+      throw new Error(`DRIVE_API_NOT_ENABLED: Google Drive API no habilitada.`);
+    }
     throw new Error(`Error obteniendo metadatos del archivo (${res.status}): ${errText}`);
   }
 
@@ -247,6 +278,10 @@ function cleanHeader(header: any): string {
  * Fetches Google Sheet structure and values for 'Ejecución' and 'Plan'
  */
 export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: string) {
+  if (!isValidGoogleAccessToken(accessToken)) {
+    throw new Error('AUTH_EXPIRED: Token de Google Sheets no válido.');
+  }
+
   // 1. Get spreadsheet metadata to locate sheet tabs
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(sheetId,title))`;
   const metaRes = await fetch(metaUrl, {
@@ -255,6 +290,15 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   if (!metaRes.ok) {
     const errText = await metaRes.text();
+    if (metaRes.status === 401) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('google_access_token');
+      }
+      throw new Error(`AUTH_EXPIRED: Token expirado al leer estructura de Google Sheets.`);
+    }
+    if (metaRes.status === 403) {
+      throw new Error(`SHEETS_API_NOT_ENABLED: La API de Google Sheets debe habilitarse en Google Cloud Console para el proyecto presupuesto-udp (106538505691).`);
+    }
     throw new Error(`Error al leer estructura de Google Sheets (${metaRes.status}): ${errText}`);
   }
 
@@ -317,6 +361,15 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   if (!valuesRes.ok) {
     const errText = await valuesRes.text();
+    if (valuesRes.status === 401) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('google_access_token');
+      }
+      throw new Error(`AUTH_EXPIRED: Token expirado al leer datos de Google Sheets.`);
+    }
+    if (valuesRes.status === 403) {
+      throw new Error(`SHEETS_API_NOT_ENABLED: La API de Google Sheets debe habilitarse en Google Cloud Console para el proyecto presupuesto-udp (106538505691).`);
+    }
     throw new Error(`Error al leer datos de celdas (${valuesRes.status}): ${errText}`);
   }
 

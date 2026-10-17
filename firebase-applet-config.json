@@ -1,12 +1,11 @@
 {
-  "projectId": "presupuesto-udp",
-  "appId": "1:106538505691:web:2a171a90c2f6e1a73903fe",
-  "apiKey": "AIzaSyD-zdhF2ofBBcSPVfQ-O6L5OrdhXAgT9a8",
-  "authDomain": "presupuesto-udp.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-remixaplicacinde-7710652d-47eb-4f4e-9d4e-fe0180ce564b",
-  "storageBucket": "presupuesto-udp.firebasestorage.app",
-  "messagingSenderId": "106538505691",
-  "measurementId": "G-ZZNVMZJ861",
-  "oAuthClientId": "",
+  "projectId": "gen-lang-client-0761785542",
+  "appId": "1:53685188471:web:493a81c986c002f8461372",
+  "apiKey": "AIzaSyAYLwmmb-x-X7NNtcDZ_pMif_TU0aLS4BQ",
+  "authDomain": "gen-lang-client-0761785542.firebaseapp.com",
+  "storageBucket": "gen-lang-client-0761785542.firebasestorage.app",
+  "messagingSenderId": "53685188471",
+  "measurementId": "",
+  "oAuthClientId": "53685188471-7pbvn7c85hesdmkpgc10872dkjfstunq.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
