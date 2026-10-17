@@ -76,3 +76,12 @@ export const logout = async () => {
     sessionStorage.removeItem('google_access_token');
   }
 };
+
+/**
+ * Valida si un token de acceso es un token real de Google OAuth
+ */
+export const isValidGoogleAccessToken = (token: string | null | undefined): boolean => {
+  if (!token) return false;
+  const t = token.trim();
+  return t.length > 15 && t !== 'token_valido' && !t.startsWith('mock_');
+};
