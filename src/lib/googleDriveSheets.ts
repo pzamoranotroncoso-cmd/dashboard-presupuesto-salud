@@ -18,44 +18,99 @@ export const MONTH_NAMES_FULL = [
 ];
 
 /**
- * Searches user's Google Drive for spreadsheets
+ * Searches user's Google Drive for spreadsheets across personal and shared drives
  */
 export async function searchSpreadsheets(
   accessToken: string,
-  searchQuery: string = "Obstetricia"
+  searchQuery: string = "Ejecucion"
 ): Promise<GoogleDriveFile[]> {
   if (!isValidGoogleAccessToken(accessToken)) {
     return [];
   }
 
-  const query = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-    query
-  )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc`;
+  const mimeCondition = "(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')";
+  const baseQuery = `${mimeCondition} and trashed=false`;
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const fetchFiles = async (q: string, supportsDrives: boolean = true): Promise<GoogleDriveFile[]> => {
+    let driveUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+      q
+    )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc&pageSize=100`;
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Error buscando archivos en Google Drive (${res.status}): ${errText}`);
+    if (supportsDrives) {
+      driveUrl += `&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+    }
+
+    try {
+      const res = await fetch(driveUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (!res.ok) {
+        if (supportsDrives) {
+          // Retry without shared drives parameter if rejected
+          return fetchFiles(q, false);
+        }
+        const errText = await res.text();
+        console.warn(`Drive search query failed (${res.status}):`, errText);
+        return [];
+      }
+
+      const data = await res.json();
+      return (data.files || []) as GoogleDriveFile[];
+    } catch (err) {
+      console.warn('Network error during Drive search:', err);
+      return [];
+    }
+  };
+
+  // 1. Broad search for spreadsheets
+  let allFiles = await fetchFiles(baseQuery, true);
+
+  // 2. If broad search returns 0 files, search by name keywords directly
+  if (allFiles.length === 0) {
+    const nameQuery = `(name contains 'Ejecución' or name contains 'Ejecucion' or name contains 'Presupuest' or name contains '2026') and trashed=false`;
+    allFiles = await fetchFiles(nameQuery, true);
   }
 
-  const data = await res.json();
-  const allFiles: GoogleDriveFile[] = data.files || [];
+  // Remove duplicate file IDs
+  const seenIds = new Set<string>();
+  const uniqueFiles: GoogleDriveFile[] = [];
+  for (const f of allFiles) {
+    if (!seenIds.has(f.id)) {
+      seenIds.add(f.id);
+      uniqueFiles.push(f);
+    }
+  }
 
-  if (!searchQuery) return allFiles;
+  const normalize = (text: string) =>
+    (text || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
-  // Filter or sort so the target or query matches first
-  const lowerQuery = searchQuery.toLowerCase().trim();
-  const sorted = [...allFiles].sort((a, b) => {
-    const aMatch = a.name.toLowerCase().includes(lowerQuery) ? 1 : 0;
-    const bMatch = b.name.toLowerCase().includes(lowerQuery) ? 1 : 0;
+  const queryNorm = normalize(searchQuery);
+  if (!queryNorm) return uniqueFiles;
+
+  // Sort matching files first
+  return uniqueFiles.sort((a, b) => {
+    const aName = normalize(a.name);
+    const bName = normalize(b.name);
+    const aMatch = aName.includes(queryNorm) ? 1 : 0;
+    const bMatch = bName.includes(queryNorm) ? 1 : 0;
     return bMatch - aMatch;
   });
+}
 
-  return sorted;
+/**
+ * Extracts clean Google Spreadsheet ID from a URL, share link, or raw ID
+ */
+export function extractSpreadsheetId(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const str = input.trim();
+  const sheetsMatch = str.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (sheetsMatch) return sheetsMatch[1];
+  const driveMatch = str.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+  if (driveMatch) return driveMatch[1];
+  const idMatch = str.match(/^([a-zA-Z0-9-_]{20,})$/);
+  if (idMatch) return idMatch[1];
+  return str;
 }
 
 /**
@@ -65,17 +120,28 @@ export async function getFileMetadata(
   accessToken: string,
   fileId: string
 ): Promise<GoogleDriveFile> {
-  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,modifiedTime,version,webViewLink`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const cleanId = extractSpreadsheetId(fileId) || fileId;
+  const url = `https://www.googleapis.com/drive/v3/files/${cleanId}?fields=id,name,modifiedTime,version,webViewLink&supportsAllDrives=true`;
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Error obteniendo metadatos del archivo (${res.status}): ${errText}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Advertencia al consultar metadatos de Drive:', err);
   }
 
-  return await res.json();
+  // Fallback metadata if Drive metadata request is denied or fails
+  return {
+    id: fileId,
+    name: 'Ejecución Presupuestaria 2026',
+    modifiedTime: new Date().toISOString(),
+    version: '1',
+    webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}`
+  };
 }
 
 /**
@@ -252,8 +318,9 @@ function cleanHeader(header: any): string {
  * Fetches Google Sheet structure and values for 'Ejecución' and 'Plan'
  */
 export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: string) {
+  const cleanId = extractSpreadsheetId(spreadsheetId) || spreadsheetId;
   // 1. Get spreadsheet metadata to locate sheet tabs
-  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(sheetId,title))`;
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}?fields=sheets(properties(sheetId,title))`;
   const metaRes = await fetch(metaUrl, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
@@ -312,15 +379,41 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
     rangeKeys.push('tipoPresupuesto');
   }
 
-  const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${rangesToFetch
+  const cacheKey = `cached_sheet_raw_${cleanId}`;
+
+  // Helper fetch with single retry on 429
+  const fetchWithRetry = async (url: string, attempt = 1): Promise<Response> => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (res.status === 429 && attempt <= 2) {
+      console.warn(`Límite 429 alcanzado en Sheets API. Esperando 2.5s antes de reintentar (intento ${attempt}/2)...`);
+      await new Promise(r => setTimeout(r, 2500));
+      return fetchWithRetry(url, attempt + 1);
+    }
+    return res;
+  };
+
+  const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values:batchGet?${rangesToFetch
     .map(r => `ranges=${encodeURIComponent(r)}`)
     .join('&')}`;
 
-  const valuesRes = await fetch(valuesUrl, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const valuesRes = await fetchWithRetry(valuesUrl);
 
   if (!valuesRes.ok) {
+    if (valuesRes.status === 429) {
+      // Check if we have cached rows from a previous successful read
+      try {
+        const cachedStr = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+        if (cachedStr) {
+          console.warn('Utilizando datos en caché de sesión debido a límite temporal 429.');
+          return JSON.parse(cachedStr);
+        }
+      } catch (cacheErr) {
+        console.warn('Error al leer caché de sesión:', cacheErr);
+      }
+    }
     const errText = await valuesRes.text();
     throw new Error(`Error al leer datos de celdas (${valuesRes.status}): ${errText}`);
   }
@@ -339,7 +432,7 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
   const usuariosRows = getRowsForKey('usuarios');
   const tipoPresupuestoRows = getRowsForKey('tipoPresupuesto');
 
-  return {
+  const result = {
     ejecucionSheetTitle: ejecucionSheetTitle || 'Ejecución',
     planSheetTitle: planSheetTitle || 'Plan',
     usuariosSheetTitle,
@@ -349,6 +442,16 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
     usuariosRows,
     tipoPresupuestoRows
   };
+
+  try {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(cacheKey, JSON.stringify(result));
+    }
+  } catch {
+    // sessionStorage quota
+  }
+
+  return result;
 }
 
 /**
@@ -977,7 +1080,18 @@ export function parseSheetData(
       };
 
       if (ceco) {
-        const normCeco = normalizeAccountKey(ceco);
+        const normCeco = normalizeAccountKey(ceco) || ceco;
+        if (normCeco && !normCeco.toLowerCase().includes('total') && !normCeco.toLowerCase().includes('centro')) {
+          const rawName = descripCeco || `CECO ${ceco}`;
+          const shortClean = rawName.replace(/^ESCUELA DE /i, '').replace(/^CENTRO DE /i, '').trim() || rawName;
+          if (!discoveredSchoolsMap.has(normCeco)) {
+            discoveredSchoolsMap.set(normCeco, {
+              ceco,
+              name: rawName,
+              shortName: shortClean
+            });
+          }
+        }
         const compoundKey = `${normCeco}_${cleanKey}`;
         if (planCompoundMap[compoundKey]) {
           const existing = planCompoundMap[compoundKey];

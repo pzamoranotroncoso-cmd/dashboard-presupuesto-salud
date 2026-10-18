@@ -7,7 +7,8 @@ import {
   searchSpreadsheets,
   parseSheetData,
   filterDataByCeco,
-  TARGET_SHEET_DEFAULT_NAME
+  TARGET_SHEET_DEFAULT_NAME,
+  extractSpreadsheetId
 } from './lib/googleDriveSheets';
 import {
   DEMO_ACCOUNTS,
@@ -112,6 +113,7 @@ export default function App() {
   lastModifiedRef.current = syncStatus.lastModifiedInDrive;
 
   const isSyncingRef = useRef<boolean>(false);
+  const hasDiscoveredFileRef = useRef<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -207,6 +209,10 @@ export default function App() {
         }));
         resolveUserProfile(currentUser.email, usersList);
         setIsAuthInitializing(false);
+        if (accessToken && !hasDiscoveredFileRef.current) {
+          hasDiscoveredFileRef.current = true;
+          discoverAndConnectFile(accessToken);
+        }
       },
       () => {
         setUser(null);
@@ -232,9 +238,10 @@ export default function App() {
     setSyncStatus(prev => ({ ...prev, state: 'syncing', error: null }));
 
     try {
-      const fileMeta = await getFileMetadata(currentToken, fileId);
+      const sanitizedId = extractSpreadsheetId(fileId) || fileId;
+      const fileMeta = await getFileMetadata(currentToken, sanitizedId);
       
-      const { ejecucionRows, planRows, usuariosRows } = await fetchSpreadsheetData(currentToken, fileId);
+      const { ejecucionRows, planRows, usuariosRows } = await fetchSpreadsheetData(currentToken, sanitizedId);
 
       const parsed = parseSheetData(ejecucionRows, planRows, usuariosRows);
 
@@ -292,26 +299,61 @@ export default function App() {
 
       showToast(`Sincronización silenciosa completada: ${fileMeta.name}`);
     } catch (err: any) {
-      console.error('Error crítico al sincronizar Google Sheets:', err);
-      setSyncStatus(prev => ({
-        ...prev,
-        state: 'error',
-        error: err.message || 'Error al conectar con la planilla'
-      }));
+      console.warn('Error al sincronizar Google Sheets:', err);
+      const isAuthError =
+        err.message?.includes('401') ||
+        err.message?.includes('invalid authentication credentials') ||
+        err.message?.includes('Invalid Credentials');
+
+      if (isAuthError) {
+        setToken(null);
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('google_access_token');
+        }
+        setSyncStatus(prev => ({
+          ...prev,
+          state: 'error',
+          error: 'La sesión de Google ha caducado. Vuelve a iniciar sesión para sincronizar la planilla.'
+        }));
+        showToast('Sesión de Google expirada. Vuelve a iniciar sesión.');
+      } else {
+        setSyncStatus(prev => ({
+          ...prev,
+          state: 'error',
+          error: err.message || 'Error al conectar con la planilla'
+        }));
+      }
     } finally {
       isSyncingRef.current = false;
     }
   }, [resolveUserProfile, user?.email]);
 
+  const loadSpreadsheetRef = useRef(loadSpreadsheet);
+  loadSpreadsheetRef.current = loadSpreadsheet;
+
   const discoverAndConnectFile = useCallback(async (currentToken: string) => {
     if (!currentToken || currentToken === 'token_valido') return;
+    if (isSyncingRef.current) return;
     try {
+      // 0. Check optional environment variable for direct sheet ID linking
+      const rawEnvSheetId = (import.meta as any).env?.VITE_TARGET_SPREADSHEET_ID;
+      const envSheetId = extractSpreadsheetId(rawEnvSheetId);
+      if (envSheetId) {
+        try {
+          await loadSpreadsheetRef.current(envSheetId, currentToken, 'Planilla Institucional 2026');
+          return;
+        } catch (envErr) {
+          console.warn('No se pudo cargar planilla por variable VITE_TARGET_SPREADSHEET_ID, buscando en Drive...', envErr);
+        }
+      }
+
       // 1. If user previously connected to a file ID, load it directly
-      const lastFileId = localStorage.getItem('last_budget_sheet_id');
+      const rawLastFileId = localStorage.getItem('last_budget_sheet_id');
+      const lastFileId = extractSpreadsheetId(rawLastFileId);
       const lastFileName = localStorage.getItem('last_budget_sheet_name');
       if (lastFileId) {
         try {
-          await loadSpreadsheet(lastFileId, currentToken, lastFileName || 'Presupuesto Conectado');
+          await loadSpreadsheetRef.current(lastFileId, currentToken, lastFileName || 'Presupuesto Conectado');
           return;
         } catch (prevLoadErr) {
           console.warn('No se pudo cargar el archivo previamente seleccionado, buscando en Drive...', prevLoadErr);
@@ -319,33 +361,62 @@ export default function App() {
       }
 
       // 2. Search for spreadsheets in Drive
-      const files = await searchSpreadsheets(currentToken, 'Ejecución');
+      const files = await searchSpreadsheets(currentToken, 'Ejecucion');
       
-      // More permissive matching: find first file containing 'Ejecución' and '2026'
-      let targetFile = files.find(
-        f => f.name.toLowerCase().includes('ejecución') && f.name.toLowerCase().includes('2026')
-      );
+      const normalize = (text: string) =>
+        (text || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
-      // Fallback: find first file containing 'Ejecución'
+      // Tier 1: Contains 'ejecucion' AND '2026'
+      let targetFile = files.find(f => {
+        const n = normalize(f.name);
+        return n.includes('ejecucion') && n.includes('2026');
+      });
+
+      // Tier 2: Contains 'presupuest' AND '2026'
       if (!targetFile) {
-        targetFile = files.find(f => f.name.toLowerCase().includes('ejecución'));
+        targetFile = files.find(f => {
+          const n = normalize(f.name);
+          return (n.includes('presupuest') || n.includes('presupuesto')) && n.includes('2026');
+        });
       }
 
-      // Fallback: if all else fails, use the first file found in the search results
+      // Tier 3: Contains 'ejecucion'
+      if (!targetFile) {
+        targetFile = files.find(f => normalize(f.name).includes('ejecucion'));
+      }
+
+      // Tier 4: Contains 'presupuest'
+      if (!targetFile) {
+        targetFile = files.find(f => normalize(f.name).includes('presupuest'));
+      }
+
+      // Tier 5: Contains 'facsyo' or 'salud' or 'udp'
+      if (!targetFile) {
+        targetFile = files.find(f => {
+          const n = normalize(f.name);
+          return n.includes('facsyo') || n.includes('salud') || n.includes('udp');
+        });
+      }
+
+      // Tier 6: First spreadsheet found
       if (!targetFile && files.length > 0) {
         targetFile = files[0];
       }
 
       if (targetFile) {
-        await loadSpreadsheet(targetFile.id, currentToken, targetFile.name);
+        console.log('Cargando planilla de Drive:', targetFile.name, targetFile.id);
+        await loadSpreadsheetRef.current(targetFile.id, currentToken, targetFile.name);
+      } else {
+        console.warn('No se encontró archivo en Drive que coincida.');
       }
     } catch (err: any) {
       console.warn('Búsqueda inicial de archivo en Google Drive:', err);
     }
-  }, [loadSpreadsheet]);
+  }, []);
 
   useEffect(() => {
-    if (token) {
+    if (token && !hasDiscoveredFileRef.current) {
+      hasDiscoveredFileRef.current = true;
       discoverAndConnectFile(token);
     }
   }, [token, discoverAndConnectFile]);
@@ -363,9 +434,9 @@ export default function App() {
     }
   }, []);
 
-  // 5. Silent Automatic Polling Engine (Requisito: Sincronización 100% silenciosa)
+  // 5. Silent Automatic Polling Engine (every 90s, minimum 60s to strictly prevent rate limits)
   useEffect(() => {
-    const intervalMs = syncStatus.autoSyncInterval;
+    const intervalMs = Math.max(syncStatus.autoSyncInterval || 90000, 60000);
     if (intervalMs <= 0) return;
 
     const intervalId = setInterval(async () => {
@@ -382,7 +453,7 @@ export default function App() {
           // Spreadsheet was modified in Google Sheets: reload silently!
           console.log('Actualización detectada en Google Sheets. Sincronizando en línea...');
           showToast('Actualización detectada en Google Sheets. Datos refrescados automáticamente.');
-          await loadSpreadsheet(activeFileId, activeToken, meta.name);
+          await loadSpreadsheetRef.current(activeFileId, activeToken, meta.name);
         } else {
           setSyncStatus(prev => ({ ...prev, lastSyncTime: new Date() }));
         }
@@ -392,7 +463,7 @@ export default function App() {
     }, intervalMs);
 
     return () => clearInterval(intervalId);
-  }, [syncStatus.autoSyncInterval, loadSpreadsheet]);
+  }, [syncStatus.autoSyncInterval]);
 
   // Login handler
   const handleLogin = async () => {
@@ -405,6 +476,10 @@ export default function App() {
         setToken(res.accessToken);
         resolveUserProfile(res.user.email, usersList);
         showToast(`Bienvenido/a, ${res.user.displayName || 'Usuario'}`);
+        if (res.accessToken && !hasDiscoveredFileRef.current) {
+          hasDiscoveredFileRef.current = true;
+          await discoverAndConnectFile(res.accessToken);
+        }
       }
     } catch (err: any) {
       console.error('Error al iniciar sesión:', err);
@@ -417,6 +492,7 @@ export default function App() {
   // Logout handler
   const handleLogout = async () => {
     await logout();
+    hasDiscoveredFileRef.current = false;
     setUser(null);
     setToken(null);
     setCurrentUserProfile(null);

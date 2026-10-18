@@ -69,6 +69,41 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             )}
           </div>
+
+          {/* Connection status badge & File selector action */}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <button
+              id="btn-header-select-file"
+              onClick={onOpenSelector}
+              className="inline-flex items-center gap-1.5 bg-white/20 hover:bg-white/30 active:bg-white/40 border border-white/30 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer group"
+              title="Vincular o cambiar la planilla de Google Sheets"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300 group-hover:scale-110 transition-transform" />
+              <span>
+                {syncStatus.state === 'synced'
+                  ? `Planilla: ${syncStatus.fileName}`
+                  : syncStatus.state === 'syncing'
+                  ? 'Sincronizando planilla...'
+                  : 'Vincular Planilla Google Sheets'}
+              </span>
+              <span className="text-[10px] bg-white/25 px-1.5 py-0.5 rounded font-semibold text-sky-100">
+                {syncStatus.state === 'synced' ? 'Cambiar' : 'Conectar'}
+              </span>
+            </button>
+
+            {syncStatus.state === 'synced' && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-200 bg-emerald-950/30 border border-emerald-400/30 px-2.5 py-0.5 rounded-full font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                Google Sheets en Vivo
+              </span>
+            )}
+
+            {syncStatus.dataSource === 'demo_model' && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-amber-200 bg-amber-950/30 border border-amber-400/30 px-2.5 py-0.5 rounded-full font-semibold">
+                Modo Datos Base (Haz clic en Vincular para conectar tu archivo)
+              </span>
+            )}
+          </div>
         </div>
 
         {/* User Auth or Sign in button */}
