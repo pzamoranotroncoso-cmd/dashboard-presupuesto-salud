@@ -31,65 +31,80 @@ export async function searchSpreadsheets(
   const mimeCondition = "(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')";
   const baseQuery = `${mimeCondition} and trashed=false`;
 
-  const fetchFiles = async (q: string, supportsDrives: boolean = true): Promise<GoogleDriveFile[]> => {
-    let driveUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+  const fetchFiles = async (q: string): Promise<GoogleDriveFile[]> => {
+    // 1. First, search personal drive (fast and works without special shared drive flags)
+    const personalDriveUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
       q
     )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc&pageSize=100`;
 
-    if (supportsDrives) {
-      driveUrl += `&supportsAllDrives=true&includeItemsFromAllDrives=true`;
-    }
-
+    let personalFiles: GoogleDriveFile[] = [];
     try {
-      const res = await fetch(driveUrl, {
+      const res = await fetch(personalDriveUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      if (!res.ok) {
-        if (supportsDrives) {
-          // Retry without shared drives parameter if rejected
-          return fetchFiles(q, false);
-        }
-        const errText = await res.text();
-        console.warn(`Drive search query failed (${res.status}):`, errText);
+      if (res.ok) {
+        const data = await res.json();
+        personalFiles = (data.files || []) as GoogleDriveFile[];
+      } else if (res.status === 401) {
+        console.warn('Sesión de Google expirada al buscar archivos en Google Drive');
         return [];
+      } else {
+        const errText = await res.text();
+        console.warn(`Búsqueda en unidad personal (${res.status}):`, errText);
       }
-
-      const data = await res.json();
-      return (data.files || []) as GoogleDriveFile[];
     } catch (err) {
-      console.warn('Network error during Drive search:', err);
-      return [];
+      console.warn('Error al consultar unidad personal en Drive:', err);
     }
+
+    // 2. Also search shared drives if available
+    let sharedFiles: GoogleDriveFile[] = [];
+    try {
+      const sharedDriveUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        q
+      )}&fields=files(id,name,modifiedTime,webViewLink,version)&orderBy=modifiedTime desc&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
+
+      const res = await fetch(sharedDriveUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        sharedFiles = (data.files || []) as GoogleDriveFile[];
+      }
+    } catch {
+      // Ignored if user has no shared drive permissions
+    }
+
+    // Merge and deduplicate by file ID
+    const seenIds = new Set<string>();
+    const merged: GoogleDriveFile[] = [];
+    for (const f of [...personalFiles, ...sharedFiles]) {
+      if (f && f.id && !seenIds.has(f.id)) {
+        seenIds.add(f.id);
+        merged.push(f);
+      }
+    }
+    return merged;
   };
 
   // 1. Broad search for spreadsheets
-  let allFiles = await fetchFiles(baseQuery, true);
+  let allFiles = await fetchFiles(baseQuery);
 
   // 2. If broad search returns 0 files, search by name keywords directly
   if (allFiles.length === 0) {
-    const nameQuery = `(name contains 'Ejecución' or name contains 'Ejecucion' or name contains 'Presupuest' or name contains '2026') and trashed=false`;
-    allFiles = await fetchFiles(nameQuery, true);
-  }
-
-  // Remove duplicate file IDs
-  const seenIds = new Set<string>();
-  const uniqueFiles: GoogleDriveFile[] = [];
-  for (const f of allFiles) {
-    if (!seenIds.has(f.id)) {
-      seenIds.add(f.id);
-      uniqueFiles.push(f);
-    }
+    const nameQuery = `(name contains 'Ejecución' or name contains 'Ejecucion' or name contains 'Presupuest' or name contains '2026' or name contains 'Copia') and trashed=false`;
+    allFiles = await fetchFiles(nameQuery);
   }
 
   const normalize = (text: string) =>
     (text || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
   const queryNorm = normalize(searchQuery);
-  if (!queryNorm) return uniqueFiles;
+  if (!queryNorm) return allFiles;
 
   // Sort matching files first
-  return uniqueFiles.sort((a, b) => {
+  return allFiles.sort((a, b) => {
     const aName = normalize(a.name);
     const bName = normalize(b.name);
     const aMatch = aName.includes(queryNorm) ? 1 : 0;
@@ -130,15 +145,23 @@ export async function getFileMetadata(
     if (res.ok) {
       return await res.json();
     }
-  } catch (err) {
+    if (res.status === 401) {
+      throw new Error('401: Sesión de Google expirada');
+    }
+    const errText = await res.text();
+    console.warn(`Consulta metadatos Drive (${res.status}):`, errText);
+  } catch (err: any) {
+    if (err.message?.includes('401')) {
+      throw err;
+    }
     console.warn('Advertencia al consultar metadatos de Drive:', err);
   }
 
-  // Fallback metadata if Drive metadata request is denied or fails
+  // Fallback metadata if Drive metadata request is denied or fails - modifiedTime is null so it NEVER causes a fake update loop
   return {
     id: fileId,
     name: 'Ejecución Presupuestaria 2026',
-    modifiedTime: new Date().toISOString(),
+    modifiedTime: null,
     version: '1',
     webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}`
   };
@@ -319,13 +342,49 @@ function cleanHeader(header: any): string {
  */
 export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: string) {
   const cleanId = extractSpreadsheetId(spreadsheetId) || spreadsheetId;
+  const cacheKey = `cached_sheet_raw_${cleanId}`;
+
+  const getCachedData = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        const str = sessionStorage.getItem(cacheKey) || localStorage.getItem(cacheKey);
+        if (str) {
+          const parsed = JSON.parse(str);
+          if (parsed && (parsed.ejecucionRows?.length || parsed.planRows?.length)) {
+            console.warn('Utilizando datos en caché local debido a límite de cuota o error de red.');
+            return parsed;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error leyendo caché:', e);
+    }
+    return null;
+  };
+
+  // Helper fetch with retry on 429
+  const fetchWithRetry = async (url: string, attempt = 1): Promise<Response> => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (res.status === 429 && attempt <= 2) {
+      console.warn(`Límite 429 de Sheets alcanzado. Esperando 3s antes de reintentar (intento ${attempt}/2)...`);
+      await new Promise(r => setTimeout(r, 3000));
+      return fetchWithRetry(url, attempt + 1);
+    }
+    return res;
+  };
+
   // 1. Get spreadsheet metadata to locate sheet tabs
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}?fields=sheets(properties(sheetId,title))`;
-  const metaRes = await fetch(metaUrl, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const metaRes = await fetchWithRetry(metaUrl);
 
   if (!metaRes.ok) {
+    if (metaRes.status === 429) {
+      const cached = getCachedData();
+      if (cached) return cached;
+    }
     const errText = await metaRes.text();
     throw new Error(`Error al leer estructura de Google Sheets (${metaRes.status}): ${errText}`);
   }
@@ -341,9 +400,6 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
   if (!planSheetTitle) {
     planSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('plan'))?.properties.title;
   }
-  console.log('Sheet titles found:', sheets.map(s => s.properties.title));
-  console.log('Identified Plan sheet title:', planSheetTitle);
-  console.log('Identified Ejecucion/Ejecutado sheet title:', ejecucionSheetTitle);
   let usuariosSheetTitle = sheets.find(s => cleanHeader(s.properties.title).includes('usuario') || cleanHeader(s.properties.title).includes('permiso') || cleanHeader(s.properties.title).includes('user'))?.properties.title;
   let tipoPresupuestoSheetTitle = sheets.find(s => {
     const ch = cleanHeader(s.properties.title);
@@ -379,22 +435,6 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
     rangeKeys.push('tipoPresupuesto');
   }
 
-  const cacheKey = `cached_sheet_raw_${cleanId}`;
-
-  // Helper fetch with single retry on 429
-  const fetchWithRetry = async (url: string, attempt = 1): Promise<Response> => {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-
-    if (res.status === 429 && attempt <= 2) {
-      console.warn(`Límite 429 alcanzado en Sheets API. Esperando 2.5s antes de reintentar (intento ${attempt}/2)...`);
-      await new Promise(r => setTimeout(r, 2500));
-      return fetchWithRetry(url, attempt + 1);
-    }
-    return res;
-  };
-
   const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values:batchGet?${rangesToFetch
     .map(r => `ranges=${encodeURIComponent(r)}`)
     .join('&')}`;
@@ -403,16 +443,8 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   if (!valuesRes.ok) {
     if (valuesRes.status === 429) {
-      // Check if we have cached rows from a previous successful read
-      try {
-        const cachedStr = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
-        if (cachedStr) {
-          console.warn('Utilizando datos en caché de sesión debido a límite temporal 429.');
-          return JSON.parse(cachedStr);
-        }
-      } catch (cacheErr) {
-        console.warn('Error al leer caché de sesión:', cacheErr);
-      }
+      const cached = getCachedData();
+      if (cached) return cached;
     }
     const errText = await valuesRes.text();
     throw new Error(`Error al leer datos de celdas (${valuesRes.status}): ${errText}`);
@@ -445,10 +477,12 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   try {
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem(cacheKey, JSON.stringify(result));
+      const jsonStr = JSON.stringify(result);
+      sessionStorage.setItem(cacheKey, jsonStr);
+      localStorage.setItem(cacheKey, jsonStr);
     }
   } catch {
-    // sessionStorage quota
+    // storage quota
   }
 
   return result;

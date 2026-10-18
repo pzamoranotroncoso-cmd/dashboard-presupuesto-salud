@@ -22,17 +22,48 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-// Proveedor estándar de Google (sin permisos sensibles que bloqueen la ventana)
+// Proveedor estándar de Google configurado con los scopes de Drive y Sheets
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({
-  prompt: 'select_account'
+  prompt: 'consent select_account',
+  access_type: 'offline'
 });
 provider.addScope('https://www.googleapis.com/auth/drive.readonly');
 provider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly');
 
+const TOKEN_KEY = 'google_access_token';
+const TOKEN_EXP_KEY = 'google_access_token_exp';
+
+const getStoredToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  const expStr = localStorage.getItem(TOKEN_EXP_KEY);
+  if (expStr && Number(expStr) < Date.now()) {
+    // Token has expired
+    sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXP_KEY);
+    return null;
+  }
+  return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
+};
+
+const storeToken = (token: string) => {
+  if (typeof window === 'undefined') return;
+  const exp = Date.now() + 50 * 60 * 1000; // 50 minutos de validez
+  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_EXP_KEY, String(exp));
+};
+
+const clearStoredToken = () => {
+  if (typeof window === 'undefined') return;
+  sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_EXP_KEY);
+};
 
 let isSigningIn = false;
-let cachedAccessToken: string | null = typeof window !== 'undefined' ? sessionStorage.getItem('google_access_token') : null;
+let cachedAccessToken: string | null = getStoredToken();
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
@@ -40,25 +71,19 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      const storedToken = typeof window !== 'undefined' ? sessionStorage.getItem('google_access_token') : null;
-      const activeToken = cachedAccessToken || storedToken;
+      const activeToken = cachedAccessToken || getStoredToken();
       if (activeToken && isValidGoogleAccessToken(activeToken)) {
         cachedAccessToken = activeToken;
         if (onAuthSuccess) onAuthSuccess(user, activeToken);
       } else {
-        // No valid Google OAuth access token present in this tab.
-        // Stay on Portada / Login Screen so the user explicitly signs in.
+        // No hay token de Google OAuth activo en almacenamiento
         cachedAccessToken = null;
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('google_access_token');
-        }
+        clearStoredToken();
         if (onAuthFailure) onAuthFailure();
       }
     } else {
       cachedAccessToken = null;
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('google_access_token');
-      }
+      clearStoredToken();
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -72,9 +97,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     const token = credential?.accessToken || null;
     if (token) {
       cachedAccessToken = token;
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('google_access_token', token);
-      }
+      storeToken(token);
     }
     return { user: result.user, accessToken: token };
   } catch (error: any) {
@@ -86,19 +109,22 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  return cachedAccessToken || getStoredToken();
 };
 
 export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
+  if (token) {
+    storeToken(token);
+  } else {
+    clearStoredToken();
+  }
 };
 
 export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
-  if (typeof window !== 'undefined') {
-    sessionStorage.removeItem('google_access_token');
-  }
+  clearStoredToken();
 };
 
 /**

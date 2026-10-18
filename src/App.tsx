@@ -55,9 +55,44 @@ export default function App() {
   const [isAccessDenied, setIsAccessDenied] = useState(false);
 
   // Raw Budget Data (across all schools in the active spreadsheet or model)
-  const [rawAccounts, setRawAccounts] = useState<BudgetAccount[]>(DEMO_ACCOUNTS);
-  const [rawTransactions, setRawTransactions] = useState<Transaction[]>(DEMO_TRANSACTIONS);
-  const [schoolsList, setSchoolsList] = useState<SchoolCecoInfo[]>(DEMO_SCHOOLS);
+  const [rawAccounts, setRawAccounts] = useState<BudgetAccount[]>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem('last_budget_sheet_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.accounts?.length > 0) return parsed.accounts;
+        }
+      }
+    } catch {}
+    return DEMO_ACCOUNTS;
+  });
+
+  const [rawTransactions, setRawTransactions] = useState<Transaction[]>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem('last_budget_sheet_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.transactions?.length > 0) return parsed.transactions;
+        }
+      }
+    } catch {}
+    return DEMO_TRANSACTIONS;
+  });
+
+  const [schoolsList, setSchoolsList] = useState<SchoolCecoInfo[]>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem('last_budget_sheet_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.schools?.length > 0) return parsed.schools;
+        }
+      }
+    } catch {}
+    return DEMO_SCHOOLS;
+  });
 
   // Active CECO filter: MUST default to 'TODOS' (Consolidado General Facultad)
   const [selectedCeco, setSelectedCeco] = useState<string>('TODOS');
@@ -295,6 +330,12 @@ export default function App() {
       if (typeof window !== 'undefined') {
         localStorage.setItem('last_budget_sheet_id', fileMeta.id);
         localStorage.setItem('last_budget_sheet_name', knownName || fileMeta.name);
+        localStorage.setItem('last_budget_sheet_data', JSON.stringify({
+          accounts: parsed.accounts,
+          transactions: parsed.transactions,
+          schools: parsed.discoveredSchools || [],
+          users: parsed.users || []
+        }));
       }
 
       showToast(`Sincronización silenciosa completada: ${fileMeta.name}`);
@@ -309,6 +350,8 @@ export default function App() {
         setToken(null);
         if (typeof window !== 'undefined') {
           sessionStorage.removeItem('google_access_token');
+          localStorage.removeItem('google_access_token');
+          localStorage.removeItem('google_access_token_exp');
         }
         setSyncStatus(prev => ({
           ...prev,
@@ -323,6 +366,7 @@ export default function App() {
           error: err.message || 'Error al conectar con la planilla'
         }));
       }
+      throw err;
     } finally {
       isSyncingRef.current = false;
     }
@@ -357,11 +401,15 @@ export default function App() {
           return;
         } catch (prevLoadErr) {
           console.warn('No se pudo cargar el archivo previamente seleccionado, buscando en Drive...', prevLoadErr);
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('last_budget_sheet_id');
+            localStorage.removeItem('last_budget_sheet_name');
+          }
         }
       }
 
       // 2. Search for spreadsheets in Drive
-      const files = await searchSpreadsheets(currentToken, 'Ejecucion');
+      const files = await searchSpreadsheets(currentToken, '');
       
       const normalize = (text: string) =>
         (text || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -398,7 +446,12 @@ export default function App() {
         });
       }
 
-      // Tier 6: First spreadsheet found
+      // Tier 6: Contains 'copia'
+      if (!targetFile) {
+        targetFile = files.find(f => normalize(f.name).includes('copia'));
+      }
+
+      // Tier 7: First spreadsheet found
       if (!targetFile && files.length > 0) {
         targetFile = files[0];
       }
@@ -434,16 +487,20 @@ export default function App() {
     }
   }, []);
 
-  // 5. Silent Automatic Polling Engine (every 90s, minimum 60s to strictly prevent rate limits)
+  // 5. Silent Automatic Polling Engine (every 120s, background visibility check)
   useEffect(() => {
-    const intervalMs = Math.max(syncStatus.autoSyncInterval || 90000, 60000);
+    const intervalMs = Math.max(syncStatus.autoSyncInterval || 120000, 120000);
     if (intervalMs <= 0) return;
 
+    let isPolling = false;
+
     const intervalId = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       const activeToken = tokenRef.current;
       const activeFileId = fileIdRef.current;
 
-      if (!activeToken || !activeFileId || isSyncingRef.current) return;
+      if (!activeToken || !activeFileId || isSyncingRef.current || isPolling) return;
+      isPolling = true;
 
       try {
         const meta = await getFileMetadata(activeToken, activeFileId);
@@ -457,8 +514,14 @@ export default function App() {
         } else {
           setSyncStatus(prev => ({ ...prev, lastSyncTime: new Date() }));
         }
-      } catch (err) {
-        console.warn('Chequeo de actualización silenciosa:', err);
+      } catch (err: any) {
+        if (err.message?.includes('401') || err.message?.includes('expirada')) {
+          console.warn('Sesión de Google expirada durante chequeo de metadatos.');
+        } else {
+          console.warn('Chequeo de actualización silenciosa:', err);
+        }
+      } finally {
+        isPolling = false;
       }
     }, intervalMs);
 
