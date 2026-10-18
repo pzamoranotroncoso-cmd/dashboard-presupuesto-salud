@@ -78,12 +78,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     </p>
                     <div className="pt-1">
                       <a
-                        href="https://console.firebase.google.com/project/gen-lang-client-0761785542/authentication/settings"
+                        href="https://console.firebase.google.com/"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 font-bold text-sky-700 hover:text-sky-900 underline"
                       >
-                        Ir a Firebase Console &gt; Dominios Autorizados
+                        Abrir Firebase Console
                       </a>
                     </div>
                   </div>

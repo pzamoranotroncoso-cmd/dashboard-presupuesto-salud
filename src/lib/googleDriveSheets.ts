@@ -1026,8 +1026,6 @@ export function parseSheetData(
     const colCuenta = findAccountCodeCol(headers);
     const colName = findAccountDescCol(headers);
     const colTotal = headers.findIndex(h => h.includes('total') || h.includes('presupuesto') || h.includes('anual') || h.includes('plan'));
-    console.log('Headers:', headers);
-    console.log('Detected colTotal index:', colTotal);
     const colTipo = findTipoPresupuestoCol(headers);
 
     // Check CECO in Plan: either via header or Col H (7) / Col I (8)
@@ -1084,9 +1082,7 @@ export function parseSheetData(
           descripCeco = cecoInfo.descripCeco;
         }
       }
-      
-      // LOGGING
-      console.log(`Parsing Plan Row ${r}: Account ${finalId}, CECO detected: ${ceco}`);
+
 
       // Column A in 'Tipo de Presupuesto' mandates budget type
       let tipoPresupuesto = accountTipoMap.get(cleanKey);
@@ -1264,11 +1260,7 @@ export function parseSheetData(
 
   const totalCalculated = accountsList.reduce((sum, acc) => sum + acc.presupuesto, 0);
   const totalEjecutadoReal = accountsList.reduce((sum, acc) => sum + acc.ejecutado, 0);
-  console.log('DEBUG: Final consolidated budget total:', totalCalculated);
-  console.log('DEBUG: Final consolidated executed total:', totalEjecutadoReal);
-  console.log('DEBUG: User expected total:', 3441439237);
-  console.log('DEBUG: User expected executed:', 727819629);
-  console.log('DEBUG: Last executed month:', lastExecutedMonthIdx !== -1 ? MONTH_NAMES_SHORT[lastExecutedMonthIdx] : 'None');
+
 
   const monthlyEvolution: MonthlyEvolutionItem[] = MONTH_NAMES_SHORT.map((mes, idx) => {
     let mesPlan = 0;
@@ -1296,7 +1288,6 @@ export function parseSheetData(
     };
   });
 
-  console.log('Total presupuesto consolidado:', accountsList.reduce((sum, a) => sum + a.presupuesto, 0));
 
   return {
     accounts: accountsList,
