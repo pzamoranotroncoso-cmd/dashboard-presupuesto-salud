@@ -123,7 +123,7 @@ export default function App() {
   // 1. RBAC User Resolution
   const resolveUserProfile = useCallback((email: string | null | undefined, currentUsers: AppUser[]) => {
     if (!email) {
-      setCurrentUserProfile(DEMO_USERS[0]);
+      setCurrentUserProfile(null);
       setIsAccessDenied(false);
       return;
     }
@@ -285,6 +285,11 @@ export default function App() {
         dataSource: 'google_sheets'
       }));
 
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('last_budget_sheet_id', fileMeta.id);
+        localStorage.setItem('last_budget_sheet_name', knownName || fileMeta.name);
+      }
+
       showToast(`Sincronización silenciosa completada: ${fileMeta.name}`);
     } catch (err: any) {
       console.error('Error crítico al sincronizar Google Sheets:', err);
@@ -299,6 +304,7 @@ export default function App() {
   }, [resolveUserProfile, user?.email]);
 
   const discoverAndConnectFile = useCallback(async (currentToken: string) => {
+    if (!currentToken || currentToken === 'token_valido') return;
     try {
       // 1. If user previously connected to a file ID, load it directly
       const lastFileId = localStorage.getItem('last_budget_sheet_id');

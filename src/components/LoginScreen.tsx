@@ -61,9 +61,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           {loginError && (
             <div className="mb-5 p-3.5 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold text-red-800">No se pudo iniciar sesión con Google</p>
-                <p className="mt-0.5 leading-relaxed">{loginError}</p>
+              <div className="flex-1 space-y-1">
+                <p className="font-bold text-red-800">
+                  {loginError.includes('unauthorized-domain')
+                    ? 'Dominio de Vercel no autorizado en Firebase'
+                    : 'No se pudo iniciar sesión con Google'}
+                </p>
+                {loginError.includes('unauthorized-domain') ? (
+                  <div className="text-[11px] text-red-700 leading-relaxed space-y-1.5">
+                    <p>
+                      Firebase bloquea el inicio de sesión porque el dominio{' '}
+                      <span className="font-mono font-semibold bg-red-100/80 px-1 py-0.5 rounded text-red-900">
+                        {typeof window !== 'undefined' ? window.location.hostname : 'tu-app.vercel.app'}
+                      </span>{' '}
+                      aún no está registrado en la lista de dominios autorizados del proyecto.
+                    </p>
+                    <div className="pt-1">
+                      <a
+                        href="https://console.firebase.google.com/project/gen-lang-client-0761785542/authentication/settings"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-bold text-sky-700 hover:text-sky-900 underline"
+                      >
+                        Ir a Firebase Console &gt; Dominios Autorizados
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-0.5 leading-relaxed">{loginError}</p>
+                )}
               </div>
             </div>
           )}

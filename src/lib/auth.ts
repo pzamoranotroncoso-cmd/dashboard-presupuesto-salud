@@ -8,7 +8,16 @@ import {
   signOut
 } from 'firebase/auth';
 
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfigJson from '../../firebase-applet-config.json';
+
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfigJson.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigJson.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigJson.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigJson.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigJson.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfigJson.appId,
+};
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
@@ -31,7 +40,20 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken || 'token_valido');
+      const storedToken = typeof window !== 'undefined' ? sessionStorage.getItem('google_access_token') : null;
+      const activeToken = cachedAccessToken || storedToken;
+      if (activeToken && isValidGoogleAccessToken(activeToken)) {
+        cachedAccessToken = activeToken;
+        if (onAuthSuccess) onAuthSuccess(user, activeToken);
+      } else {
+        // No valid Google OAuth access token present in this tab.
+        // Stay on Portada / Login Screen so the user explicitly signs in.
+        cachedAccessToken = null;
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('google_access_token');
+        }
+        if (onAuthFailure) onAuthFailure();
+      }
     } else {
       cachedAccessToken = null;
       if (typeof window !== 'undefined') {
@@ -47,10 +69,12 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    const token = credential?.accessToken || 'token_valido';
-    cachedAccessToken = token;
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('google_access_token', token);
+    const token = credential?.accessToken || null;
+    if (token) {
+      cachedAccessToken = token;
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('google_access_token', token);
+      }
     }
     return { user: result.user, accessToken: token };
   } catch (error: any) {
@@ -62,7 +86,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken || 'token_valido';
+  return cachedAccessToken;
 };
 
 export const setCachedAccessToken = (token: string | null) => {
