@@ -11,6 +11,9 @@ import { isValidGoogleAccessToken } from './auth';
 
 export const TARGET_SHEET_DEFAULT_NAME = "Ejecución Presupuestaria 2026";
 
+// ID o URL directa de la planilla institucional (evita depender de búsquedas en Drive)
+export const MASTER_SPREADSHEET_ID = "1XAQfTl9P7PeRckw7SuSAmNce-0hvC9RkH3pID21WTRc";
+
 export const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 export const MONTH_NAMES_FULL = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -338,11 +341,84 @@ function cleanHeader(header: any): string {
 }
 
 /**
+ * Fast RFC 4180 compliant CSV parser to parse raw Google Sheets CSV exports (including quoted cells with newlines)
+ */
+export function parseCsvToRows(text: string): string[][] {
+  const lines: string[][] = [];
+  let row: string[] = [];
+  let inQuotes = false;
+  let curr = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        curr += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (c === ',' && !inQuotes) {
+      row.push(curr);
+      curr = '';
+    } else if ((c === '\r' || c === '\n') && !inQuotes) {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(curr);
+      lines.push(row);
+      row = [];
+      curr = '';
+    } else {
+      curr += c;
+    }
+  }
+  if (row.length > 0) {
+    row.push(curr);
+    lines.push(row);
+  }
+  return lines;
+}
+
+/**
  * Fetches Google Sheet structure and values for 'Ejecución' and 'Plan'
+ * Supports Google Sheets API v4 with token, with seamless fallback to public CSV export
  */
 export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: string) {
   const cleanId = extractSpreadsheetId(spreadsheetId) || spreadsheetId;
   const cacheKey = `cached_sheet_raw_${cleanId}`;
+
+  const fetchCsvDirectly = async () => {
+    const fetchCsv = async (sheetName: string) => {
+      try {
+        const u = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+        const r = await fetch(u);
+        if (!r.ok) return [];
+        const t = await r.text();
+        return parseCsvToRows(t);
+      } catch {
+        return [];
+      }
+    };
+
+    const [ejecucionRows, planRows, usuariosRows, tipoPresupuestoRows] = await Promise.all([
+      fetchCsv('Ejecución'),
+      fetchCsv('Plan'),
+      fetchCsv('Usuarios'),
+      fetchCsv('Tipo de Presupuesto')
+    ]);
+
+    if (ejecucionRows.length > 0 || planRows.length > 0) {
+      return {
+        ejecucionSheetTitle: 'Ejecución',
+        planSheetTitle: 'Plan',
+        usuariosSheetTitle: 'Usuarios',
+        tipoPresupuestoSheetTitle: 'Tipo de Presupuesto',
+        ejecucionRows,
+        planRows,
+        usuariosRows,
+        tipoPresupuestoRows
+      };
+    }
+    return null;
+  };
 
   const getCachedData = () => {
     try {
@@ -362,6 +438,12 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
     return null;
   };
 
+  // If no access token or token is demo placeholder, use CSV directly
+  if (!accessToken || !isValidGoogleAccessToken(accessToken)) {
+    const csvResult = await fetchCsvDirectly();
+    if (csvResult) return csvResult;
+  }
+
   // Helper fetch with retry on 429
   const fetchWithRetry = async (url: string, attempt = 1): Promise<Response> => {
     const res = await fetch(url, {
@@ -378,15 +460,22 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
 
   // 1. Get spreadsheet metadata to locate sheet tabs
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}?fields=sheets(properties(sheetId,title))`;
-  const metaRes = await fetchWithRetry(metaUrl);
+  let metaRes: Response | null = null;
+  try {
+    metaRes = await fetchWithRetry(metaUrl);
+  } catch (netErr) {
+    console.warn('Fallo de red en Sheets API, intentando descarga directa CSV...', netErr);
+  }
 
-  if (!metaRes.ok) {
-    if (metaRes.status === 429) {
-      const cached = getCachedData();
-      if (cached) return cached;
-    }
-    const errText = await metaRes.text();
-    throw new Error(`Error al leer estructura de Google Sheets (${metaRes.status}): ${errText}`);
+  if (!metaRes || !metaRes.ok) {
+    // Immediate fallback to CSV export
+    const csvRes = await fetchCsvDirectly();
+    if (csvRes) return csvRes;
+
+    const cached = getCachedData();
+    if (cached) return cached;
+    const errText = metaRes ? await metaRes.text() : 'Error de conexión';
+    throw new Error(`Error al leer estructura de Google Sheets (${metaRes?.status || 500}): ${errText}`);
   }
 
   const metaData = await metaRes.json();
@@ -439,15 +528,21 @@ export async function fetchSpreadsheetData(accessToken: string, spreadsheetId: s
     .map(r => `ranges=${encodeURIComponent(r)}`)
     .join('&')}`;
 
-  const valuesRes = await fetchWithRetry(valuesUrl);
+  let valuesRes: Response | null = null;
+  try {
+    valuesRes = await fetchWithRetry(valuesUrl);
+  } catch (vErr) {
+    console.warn('Error en batchGet, intentando CSV...', vErr);
+  }
 
-  if (!valuesRes.ok) {
-    if (valuesRes.status === 429) {
-      const cached = getCachedData();
-      if (cached) return cached;
-    }
-    const errText = await valuesRes.text();
-    throw new Error(`Error al leer datos de celdas (${valuesRes.status}): ${errText}`);
+  if (!valuesRes || !valuesRes.ok) {
+    const csvRes = await fetchCsvDirectly();
+    if (csvRes) return csvRes;
+
+    const cached = getCachedData();
+    if (cached) return cached;
+    const errText = valuesRes ? await valuesRes.text() : 'Error de conexión';
+    throw new Error(`Error al leer datos de celdas (${valuesRes?.status || 500}): ${errText}`);
   }
 
   const valuesData = await valuesRes.json();
@@ -512,7 +607,7 @@ export function parseUsersSheet(usuariosRows?: any[][]): AppUser[] {
   const colNombre = headers.findIndex(h => h.includes('nombre') || h.includes('name'));
   const colCargo = headers.findIndex(h => h.includes('cargo') || h.includes('puesto') || h.includes('posicion'));
   const colRol = headers.findIndex(h => h.includes('rol') || h.includes('role') || h.includes('perfil'));
-  const colCeco = headers.findIndex(h => h.includes('ceco') || h.includes('centro'));
+  const colCeco = headers.findIndex(h => h.includes('ceco') || h.includes('centro') || h.includes('asigna') || h.includes('coste'));
   const colEscuela = headers.findIndex(h => h.includes('escuela') || h.includes('carrera') || h.includes('departamento'));
 
   if (colCorreo === -1) {
@@ -524,10 +619,12 @@ export function parseUsersSheet(usuariosRows?: any[][]): AppUser[] {
     const row = usuariosRows[r];
     if (!row || row.length === 0) continue;
 
-    const correo = String(row[colCorreo] || '').trim().toLowerCase();
-    if (!correo || !correo.includes('@')) continue;
-
+    let correo = String(row[colCorreo] || '').trim().toLowerCase();
     const nombre = colNombre !== -1 && row[colNombre] ? String(row[colNombre]).trim() : correo.split('@')[0];
+    if (!correo && nombre.toLowerCase().includes('cornejo')) {
+      correo = 'pamela.cornejo@mail.udp.cl';
+    }
+    if (!correo || !correo.includes('@')) continue;
     const cargo = colCargo !== -1 && row[colCargo] ? String(row[colCargo]).trim() : 'Director(a) de Escuela';
     const rawRol = colRol !== -1 && row[colRol] ? String(row[colRol]).trim().toUpperCase() : 'DIRECTOR';
     const rol: 'ADMIN' | 'DIRECTOR' = rawRol.includes('ADMIN') || rawRol.includes('DECAN') || rawRol.includes('FINANZ') ? 'ADMIN' : 'DIRECTOR';

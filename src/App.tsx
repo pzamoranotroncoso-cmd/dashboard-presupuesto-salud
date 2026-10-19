@@ -8,7 +8,8 @@ import {
   parseSheetData,
   filterDataByCeco,
   TARGET_SHEET_DEFAULT_NAME,
-  extractSpreadsheetId
+  extractSpreadsheetId,
+  MASTER_SPREADSHEET_ID
 } from './lib/googleDriveSheets';
 import {
   DEMO_ACCOUNTS,
@@ -383,7 +384,35 @@ export default function App() {
     if (!currentToken || currentToken === 'token_valido') return;
     if (isSyncingRef.current) return;
     try {
-      // 0. Check optional environment variable for direct sheet ID linking
+      // 0A. Check URL query param ?sheet= or ?sheetId= or ?url=
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const querySheet = params.get('sheet') || params.get('sheetId') || params.get('sheetUrl') || params.get('url');
+        const queryId = extractSpreadsheetId(querySheet);
+        if (queryId) {
+          try {
+            await loadSpreadsheetRef.current(queryId, currentToken, 'Planilla Institucional 2026');
+            return;
+          } catch (qErr) {
+            console.warn('No se pudo cargar planilla desde parámetro URL:', qErr);
+          }
+        }
+      }
+
+      // 0B. Check MASTER_SPREADSHEET_ID constant
+      if (MASTER_SPREADSHEET_ID) {
+        const masterId = extractSpreadsheetId(MASTER_SPREADSHEET_ID);
+        if (masterId) {
+          try {
+            await loadSpreadsheetRef.current(masterId, currentToken, 'Planilla Institucional 2026');
+            return;
+          } catch (mErr) {
+            console.warn('No se pudo cargar planilla desde MASTER_SPREADSHEET_ID:', mErr);
+          }
+        }
+      }
+
+      // 0C. Check optional environment variable for direct sheet ID linking
       const rawEnvSheetId = (import.meta as any).env?.VITE_TARGET_SPREADSHEET_ID;
       const envSheetId = extractSpreadsheetId(rawEnvSheetId);
       if (envSheetId) {
@@ -496,6 +525,15 @@ export default function App() {
       discoverAndConnectFile(token);
     }
   }, [token, discoverAndConnectFile]);
+
+  // Pre-load live spreadsheet data in background on mount
+  useEffect(() => {
+    if (MASTER_SPREADSHEET_ID) {
+      loadSpreadsheetRef.current(MASTER_SPREADSHEET_ID, tokenRef.current || '', 'Ejecución Presupuestaria 2026').catch(err => {
+        console.warn('Carga inicial de planilla:', err);
+      });
+    }
+  }, []);
 
   const refreshFiles = useCallback(async (currentToken: string) => {
     setIsRefreshingFiles(true);
