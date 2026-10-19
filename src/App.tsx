@@ -55,7 +55,7 @@ export default function App() {
   const [isAccessDenied, setIsAccessDenied] = useState(false);
 
   // Raw Budget Data (across all schools in the active spreadsheet or model)
-  const DATA_CACHE_KEY_VERSION = 'last_budget_cache_v2026_prod';
+  const DATA_CACHE_KEY_VERSION = 'last_budget_cache_v2026_clean_v3';
 
   const [rawAccounts, setRawAccounts] = useState<BudgetAccount[]>(() => {
     try {
@@ -70,6 +70,8 @@ export default function App() {
         } else {
           // Invalidate legacy cached data to ensure clean, accurate budget figures
           localStorage.removeItem('last_budget_sheet_data');
+          localStorage.removeItem('last_budget_sheet_id');
+          localStorage.removeItem('last_budget_sheet_name');
           localStorage.setItem('last_budget_cache_version', DATA_CACHE_KEY_VERSION);
         }
       }
@@ -214,20 +216,7 @@ export default function App() {
       };
     }
 
-    // If UDP institutional email not in list, grant access to General Faculty or Director
-    if (!matched && (cleanEmail.endsWith('@mail.udp.cl') || cleanEmail.endsWith('@udp.cl'))) {
-      const namePart = cleanEmail.split('@')[0].replace('.', ' ');
-      const capitalized = namePart.charAt(0).toUpperCase() + namePart.slice(1);
-      matched = {
-        correo: cleanEmail,
-        nombre: capitalized,
-        cargo: 'Autoridad / Directivo UDP',
-        rol: 'ADMIN',
-        ceco: 'TODOS',
-        escuela: 'Facultad de Salud y Odontología'
-      };
-    }
-
+    // Strict RBAC: No wildcards. Users MUST be present in currentUsers (from Usuarios sheet) or be Patricio/Decano fail-safe.
     if (matched) {
       setCurrentUserProfile(matched);
       setIsAccessDenied(false);
@@ -429,13 +418,29 @@ export default function App() {
       const normalize = (text: string) =>
         (text || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
-      // Tier 1: Contains 'ejecucion' AND '2026'
+      // Tier 1: Master file containing 'ejecucion' AND '2026' (WITHOUT 'copia')
       let targetFile = files.find(f => {
         const n = normalize(f.name);
-        return n.includes('ejecucion') && n.includes('2026');
+        return n.includes('ejecucion') && n.includes('2026') && !n.includes('copia');
       });
 
-      // Tier 2: Contains 'presupuest' AND '2026'
+      // Tier 2: Master file containing 'presupuest' AND '2026' (WITHOUT 'copia')
+      if (!targetFile) {
+        targetFile = files.find(f => {
+          const n = normalize(f.name);
+          return (n.includes('presupuest') || n.includes('presupuesto')) && n.includes('2026') && !n.includes('copia');
+        });
+      }
+
+      // Tier 3: Any file containing 'ejecucion' AND '2026'
+      if (!targetFile) {
+        targetFile = files.find(f => {
+          const n = normalize(f.name);
+          return n.includes('ejecucion') && n.includes('2026');
+        });
+      }
+
+      // Tier 4: Any file containing 'presupuest' AND '2026'
       if (!targetFile) {
         targetFile = files.find(f => {
           const n = normalize(f.name);
@@ -443,17 +448,25 @@ export default function App() {
         });
       }
 
-      // Tier 3: Contains 'ejecucion'
+      // Tier 5: Contains 'ejecucion' without copia
+      if (!targetFile) {
+        targetFile = files.find(f => {
+          const n = normalize(f.name);
+          return n.includes('ejecucion') && !n.includes('copia');
+        });
+      }
+
+      // Tier 6: Contains 'ejecucion'
       if (!targetFile) {
         targetFile = files.find(f => normalize(f.name).includes('ejecucion'));
       }
 
-      // Tier 4: Contains 'presupuest'
+      // Tier 7: Contains 'presupuest'
       if (!targetFile) {
         targetFile = files.find(f => normalize(f.name).includes('presupuest'));
       }
 
-      // Tier 5: Contains 'facsyo' or 'salud' or 'udp'
+      // Tier 8: Contains 'facsyo' or 'salud' or 'udp'
       if (!targetFile) {
         targetFile = files.find(f => {
           const n = normalize(f.name);
@@ -461,12 +474,7 @@ export default function App() {
         });
       }
 
-      // Tier 6: Contains 'copia'
-      if (!targetFile) {
-        targetFile = files.find(f => normalize(f.name).includes('copia'));
-      }
-
-      // Tier 7: First spreadsheet found
+      // Tier 9: First spreadsheet found
       if (!targetFile && files.length > 0) {
         targetFile = files[0];
       }
@@ -560,6 +568,15 @@ export default function App() {
         }
       }
     } catch (err: any) {
+      if (
+        err?.code === 'auth/popup-closed-by-user' ||
+        err?.code === 'auth/cancelled-popup-request' ||
+        err?.message?.includes('closed-by-user') ||
+        err?.message?.includes('cancelled-popup-request')
+      ) {
+        // User closed or cancelled the popup voluntarily; don't show error box
+        return;
+      }
       console.error('Error al iniciar sesión:', err);
       setLoginError(err.message || 'No se pudo iniciar sesión con Google.');
     } finally {
@@ -569,13 +586,30 @@ export default function App() {
 
   // Logout handler
   const handleLogout = async () => {
-    await logout();
+    try {
+      await logout();
+    } catch (err) {
+      console.warn('Error during logout:', err);
+    }
     hasDiscoveredFileRef.current = false;
     setUser(null);
     setToken(null);
     setCurrentUserProfile(null);
     setIsAccessDenied(false);
     setLoginError(null);
+
+    // Thorough cleanup of local and session storage
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.clear();
+        localStorage.removeItem('google_access_token');
+        localStorage.removeItem('google_access_token_exp');
+        localStorage.removeItem('last_budget_sheet_id');
+        localStorage.removeItem('last_budget_sheet_name');
+        localStorage.removeItem('last_budget_sheet_data');
+      } catch {}
+    }
+
     setRawAccounts(DEMO_ACCOUNTS);
     setRawTransactions(DEMO_TRANSACTIONS);
     setSelectedCeco(DEMO_CECO);
@@ -589,7 +623,7 @@ export default function App() {
       autoSyncInterval: 25000,
       dataSource: 'demo_model'
     });
-    showToast('Sesión cerrada.');
+    showToast('Sesión cerrada correctamente.');
   };
 
   // Step 2 & 3: RBAC CECO Filtering & Recalculation
