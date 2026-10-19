@@ -1120,23 +1120,34 @@ export function parseSheetData(
     if (headerIdx === -1) headerIdx = 0;
 
     const headers = planRows[headerIdx].map(cleanHeader);
-    const colCuenta = findAccountCodeCol(headers);
-    const colName = findAccountDescCol(headers);
-    const colTotal = headers.findIndex(h => h.includes('total') || h.includes('presupuesto') || h.includes('anual') || h.includes('plan'));
-    const colTipo = findTipoPresupuestoCol(headers);
+    let colCuenta = findAccountCodeCol(headers);
+    let colName = findAccountDescCol(headers);
+    let colTotal = headers.findIndex(h => h.includes('total') || h.includes('presupuesto') || h.includes('anual') || h.includes('plan'));
+    let colTipo = findTipoPresupuestoCol(headers);
 
     // Check CECO in Plan: either via header or Col H (7) / Col I (8)
     let planColCeco = headers.findIndex(h => (h.includes('ceco') || h.includes('centro')) && !h.includes('desc'));
     let planColDescCeco = headers.findIndex(h => h.includes('desc') && (h.includes('ceco') || h.includes('cost')));
 
-    if (planColCeco === -1 && planRows.length > headerIdx + 1) {
-      // Check if Col H (7) matches any known CECO
+    // Structural detection for UDP Plan sheet where row 0 headers have empty cells:
+    // Col 0: CECO code (e.g. 1180454001)
+    // Col 1: Descrip CECO (e.g. Obstetricia)
+    // Col 5: Descrip Cuenta (e.g. INSUMOS TÉCNICOS)
+    // Col 6: N° de Cuenta (e.g. 4202010106)
+    // Col 19: Total Anual Planificado (e.g. 7.644.000)
+    if (planRows.length > headerIdx + 1) {
       const sampleRow = planRows[headerIdx + 1];
-      if (sampleRow && sampleRow.length > 7) {
-        const potentialCeco = normalizeAccountKey(sampleRow[7]);
-        if (potentialCeco && discoveredSchoolsMap.has(potentialCeco)) {
-          planColCeco = 7;
-          planColDescCeco = 8;
+      if (sampleRow) {
+        if (planColCeco === -1 && /^\d{8,12}$/.test(String(sampleRow[0] || '').trim())) {
+          planColCeco = 0;
+          if (planColDescCeco === -1) planColDescCeco = 1;
+        }
+        if (colCuenta === -1 && /^\d{6,12}$/.test(String(sampleRow[6] || '').trim())) {
+          colCuenta = 6;
+          if (colName === -1) colName = 5;
+        }
+        if (colTotal === -1 && sampleRow.length > 19) {
+          colTotal = 19;
         }
       }
     }
@@ -1150,6 +1161,14 @@ export function parseSheetData(
         }
       });
     });
+
+    // If fewer than 6 months matched by header text, map structural columns 7..18 (Ene..Dic)
+    if (monthColIndices.length < 6) {
+      monthColIndices.length = 0;
+      MONTH_NAMES_SHORT.forEach((m, mIdx) => {
+        monthColIndices.push({ mes: m, idx: 7 + mIdx });
+      });
+    }
 
     for (let r = headerIdx + 1; r < planRows.length; r++) {
       const row = planRows[r];
@@ -1180,7 +1199,6 @@ export function parseSheetData(
         }
       }
 
-
       // Column A in 'Tipo de Presupuesto' mandates budget type
       let tipoPresupuesto = accountTipoMap.get(cleanKey);
       if (!tipoPresupuesto) {
@@ -1193,8 +1211,14 @@ export function parseSheetData(
       monthColIndices.forEach(({ mes, idx }) => {
         const val = parseFinancialNumber(row[idx]);
         monthly[mes] = val;
-        totalPlan += val;
       });
+
+      if (colTotal !== -1 && row[colTotal]) {
+        totalPlan = parseFinancialNumber(row[colTotal]);
+      }
+      if (totalPlan === 0) {
+        totalPlan = Object.values(monthly).reduce((a, b) => a + b, 0);
+      }
 
       const planEntry: PlanEntry = {
         rawId: finalId,

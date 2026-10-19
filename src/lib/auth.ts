@@ -22,14 +22,11 @@ export const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-// Proveedor estándar de Google configurado con los scopes de Drive y Sheets
+// Proveedor estándar de Google (sin scopes sensibles de Drive para evitar pantalla de 'App no verificada')
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({
-  prompt: 'consent select_account',
-  access_type: 'offline'
+  prompt: 'select_account'
 });
-provider.addScope('https://www.googleapis.com/auth/drive.readonly');
-provider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly');
 
 const TOKEN_KEY = 'google_access_token';
 const TOKEN_EXP_KEY = 'google_access_token_exp';
