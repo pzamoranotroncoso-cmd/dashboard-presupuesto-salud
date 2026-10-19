@@ -55,13 +55,22 @@ export default function App() {
   const [isAccessDenied, setIsAccessDenied] = useState(false);
 
   // Raw Budget Data (across all schools in the active spreadsheet or model)
+  const DATA_CACHE_KEY_VERSION = 'last_budget_cache_v2026_prod';
+
   const [rawAccounts, setRawAccounts] = useState<BudgetAccount[]>(() => {
     try {
       if (typeof window !== 'undefined') {
-        const cached = localStorage.getItem('last_budget_sheet_data');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.accounts?.length > 0) return parsed.accounts;
+        const ver = localStorage.getItem('last_budget_cache_version');
+        if (ver === DATA_CACHE_KEY_VERSION) {
+          const cached = localStorage.getItem('last_budget_sheet_data');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.accounts?.length > 0) return parsed.accounts;
+          }
+        } else {
+          // Invalidate legacy cached data to ensure clean, accurate budget figures
+          localStorage.removeItem('last_budget_sheet_data');
+          localStorage.setItem('last_budget_cache_version', DATA_CACHE_KEY_VERSION);
         }
       }
     } catch {}
@@ -71,10 +80,13 @@ export default function App() {
   const [rawTransactions, setRawTransactions] = useState<Transaction[]>(() => {
     try {
       if (typeof window !== 'undefined') {
-        const cached = localStorage.getItem('last_budget_sheet_data');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.transactions?.length > 0) return parsed.transactions;
+        const ver = localStorage.getItem('last_budget_cache_version');
+        if (ver === DATA_CACHE_KEY_VERSION) {
+          const cached = localStorage.getItem('last_budget_sheet_data');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.transactions?.length > 0) return parsed.transactions;
+          }
         }
       }
     } catch {}
@@ -84,10 +96,13 @@ export default function App() {
   const [schoolsList, setSchoolsList] = useState<SchoolCecoInfo[]>(() => {
     try {
       if (typeof window !== 'undefined') {
-        const cached = localStorage.getItem('last_budget_sheet_data');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.schools?.length > 0) return parsed.schools;
+        const ver = localStorage.getItem('last_budget_cache_version');
+        if (ver === DATA_CACHE_KEY_VERSION) {
+          const cached = localStorage.getItem('last_budget_sheet_data');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.schools?.length > 0) return parsed.schools;
+          }
         }
       }
     } catch {}
