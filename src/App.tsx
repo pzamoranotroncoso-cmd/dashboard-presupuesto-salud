@@ -56,7 +56,7 @@ export default function App() {
   const [isAccessDenied, setIsAccessDenied] = useState(false);
 
   // Raw Budget Data (across all schools in the active spreadsheet or model)
-  const DATA_CACHE_KEY_VERSION = 'last_budget_cache_v2026_clean_v3';
+  const DATA_CACHE_KEY_VERSION = 'last_budget_cache_v2026_clean_v4';
 
   const [rawAccounts, setRawAccounts] = useState<BudgetAccount[]>(() => {
     try {

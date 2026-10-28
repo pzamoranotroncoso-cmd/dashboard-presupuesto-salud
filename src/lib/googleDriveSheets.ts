@@ -1162,8 +1162,8 @@ export function parseSheetData(
       });
     });
 
-    // If fewer than 6 months matched by header text, map structural columns 7..18 (Ene..Dic)
-    if (monthColIndices.length < 6) {
+    // If fewer than 12 months matched by header text (e.g. empty headers in Ene, Mar, Jun), map structural columns 7..18 (Ene..Dic)
+    if (monthColIndices.length < 12) {
       monthColIndices.length = 0;
       MONTH_NAMES_SHORT.forEach((m, mIdx) => {
         monthColIndices.push({ mes: m, idx: 7 + mIdx });
